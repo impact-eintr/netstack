@@ -14,18 +14,37 @@ func (err *Error) IgnoreStats() bool {
 }
 
 var (
-	ErrUnknowProtovol       = &Error{msg: "unknown protocol"}
-	ErrUnknowNICID          = &Error{msg: "unknown nic id"}
-	ErrUnknowProtocolOption = &Error{msg: "unknown option for protocol"}
-	ErrDuplicateNICID       = &Error{msg: "duplicate nic id"}
-	ErrDuplicateAddress     = &Error{msg: "duplicate address"}
-	ErrNoRoute              = &Error{msg: "no route"}
-	ErrBadLinkEndPoint      = &Error{msg: "bad link layer endpoint"}
-	ErrAlreadyBound         = &Error{msg: "endpoint already bound", ignoreStats: true}
-	ErrInvalidEndpointState = &Error{msg: "endpoint is in invalid state"}
-	ErrAlreadConnecting     = &Error{msg: "endpoint is already connecting", ignoreStats: true}
-	ErrAlreadConnected      = &Error{msg: "endpoint is already connected", ignoreStats: true}
-	ErrNoPortAvailable      = &Error{msg: "no port are available"}
-	ErrPortInUse            = &Error{msg: "port is in use"}
-	ErrBadLocalAddress = &
+	ErrUnknowProtovol        = &Error{msg: "unknown protocol"}
+	ErrUnknowNICID           = &Error{msg: "unknown nic id"}
+	ErrUnknowProtocolOption  = &Error{msg: "unknown option for protocol"}
+	ErrDuplicateNICID        = &Error{msg: "duplicate nic id"}
+	ErrDuplicateAddress      = &Error{msg: "duplicate address"}
+	ErrNoRoute               = &Error{msg: "no route"}
+	ErrBadLinkEndPoint       = &Error{msg: "bad link layer endpoint"}
+	ErrAlreadyBound          = &Error{msg: "endpoint already bound", ignoreStats: true}
+	ErrInvalidEndpointState  = &Error{msg: "endpoint is in invalid state"}
+	ErrAlreadConnecting      = &Error{msg: "endpoint is already connecting", ignoreStats: true}
+	ErrAlreadConnected       = &Error{msg: "endpoint is already connected", ignoreStats: true}
+	ErrNoPortAvailable       = &Error{msg: "no port are available"}
+	ErrPortInUse             = &Error{msg: "port is in use"}
+	ErrBadLocalAddress       = &Error{msg: "bad local address"}
+	ErrClosedForSend         = &Error{msg: "endpoint is closed for send"}
+	ErrClosedForReceive      = &Error{msg: "endpoint is closed for receive"}
+	ErrWouldBlock            = &Error{msg: "operation would block", ignoreStats: true}
+	ErrConnectionRefused     = &Error{msg: "connection was refused"}
+	ErrTimeout               = &Error{msg: "operation timed out"}
+	ErrAborted               = &Error{msg: "operation aborted"}
+	ErrConnectStarted        = &Error{msg: "connection address is required"}
+	ErrDestinationRequired   = &Error{msg: "destination address is required"}
+	ErrNotSupported          = &Error{msg: "operation not supported"}
+	ErrQueueSizeNotSupported = &Error{msg: "queue size querying not supported"}
+	ErrNotConnected          = &Error{msg: "endpoint not connected"}
+	ErrConnectionReset       = &Error{msg: "connection reset by peer"}
+	ErrConnectionAborted     = &Error{msg: "connection aborted"}
+	ErrNoSuchFile            = &Error{msg: "invalid option value specified"}
+	ErrNoLinkAddress         = &Error{msg: "no remote link address"}
+	ErrBadAddress            = &Error{msg: "bad adress"}
+	ErrNetworkUnreachable    = &Error{msg: "network is unreachable"}
+	ErrMessageTooLong        = &Error{msg: "message too long"}
+	ErrNoBufferSpace         = &Error{msg: "no buffer space available"}
 )
