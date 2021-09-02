@@ -12,7 +12,7 @@ const maxErrno = 134
 var translations [maxErrno]*tcpip.Error
 
 func TranslationErrno(s syscall.Errno) *tcpip.Error {
-	if err := translations[e]; err != nil {
+	if err := translations[s]; err != nil {
 		return err
 	}
 	return tcpip.ErrInvalidEndpointState

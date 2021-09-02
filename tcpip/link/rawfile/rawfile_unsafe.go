@@ -23,7 +23,7 @@ func GetMTU(name string) (uint32, error) {
 
 	copy(ifreq.name[:], name)
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL,
-		uintptr(fd), syscall.SIOCGIFMTU, uintptr(&ifreq))
+		uintptr(fd), syscall.SIOCGIFMTU, uintptr(unsafe.Pointer(&ifreq)))
 	if errno != 0 {
 		return 0, errno
 	}
@@ -73,4 +73,44 @@ type pollEvent struct {
 	fd      int32
 	events  int16
 	revents int16
+}
+
+func BlockingRead(fd int, b []byte) (int, *tcpip.Error) {
+	for {
+		n, _, e := syscall.RawSyscall(syscall.SYS_READ,
+			uintptr(fd), uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)))
+		if e == 0 {
+			return int(n), nil
+		}
+
+		event := pollEvent{
+			fd:     int32(fd),
+			events: 1,
+		}
+
+		_, e = blockingPoll(&event, 1, -1)
+		if e != 0 && e != syscall.EINTR {
+			return 0, TranslationErrno(e)
+		}
+	}
+}
+
+func BlockingReadv(fd int, iovecs []syscall.Iovec) (int, *tcpip.Error) {
+	for {
+		n, _, e := syscall.RawSyscall(syscall.SYS_READV,
+			uintptr(fd), uintptr(unsafe.Pointer(&iovecs[0])), uintptr(len(iovecs)))
+		if e == 0 {
+			return int(n), nil
+		}
+
+		event := pollEvent{
+			fd:     int32(fd),
+			events: 1,
+		}
+
+		_, e = blockingPoll(&event, 1, -1)
+		if e != 0 && e != syscall.EINTR {
+			return 0, TranslationErrno(e)
+		}
+	}
 }

@@ -18,7 +18,7 @@ func main() {
 	// 启动tap网卡
 	_ = tuntap.SetLinkUp(tapName)
 	// 添加ip地址
-	_ = tuntap.AddIP(tapName, "192.168.1.1/24")
+	_ = tuntap.AddIP(tapName, "192.168.1.0/24")
 
 	buf := make([]byte, 1<<16)
 	for {
