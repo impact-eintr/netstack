@@ -505,9 +505,76 @@ ping 192.168.1.1
 ### 链路层数据帧
 数据在链路层传输都是一帧一帧传输的，就像发送邮件一样，将信放入信封中，接着把信封邮寄出去，这样可以把一段信息和另一段信息区分开来，下面先介绍数据帧格式。
 
-![](../../img/链路层数据帧.png )\
+![](../../img/链路层数据帧.png )
 
 - 目的 MAC 地址：目的设备的 MAC 物理地址。
 - 源 MAC 地址：发送设备的 MAC 物理地址。
 - 类型：表示后面所跟数据包的协议类型，例如 Type 为 0x8000 时为 IPv4 协议包，Type 为 0x8060 时，后面为 ARP 协议包。
 - 数据：表示该帧的数据内容，长度为 46 ～ 1500 字节，包含网络层、传输层和应用层的数据。
+
+既然前面我们已经知道了链路层数据帧格式，也知道了链路层协议头的详细信息，那么现在就根据这些信息来处理以太网数据。我们把处理头部数据的代码都放在 header 包中
+
+``` go
+package header
+
+import (
+    "encoding/binary"
+
+    "tcpip/netstack/tcpip"
+)
+
+// 以太网帧头部信息的偏移量
+const (
+    dstMAC  = 0
+    srcMAC  = 6
+    ethType = 12
+)
+
+// EthernetFields表示链路层以太网帧的头部
+type EthernetFields struct {
+    // 源地址
+    SrcAddr tcpip.LinkAddress
+
+    // 目的地址
+    DstAddr tcpip.LinkAddress
+
+    // 协议类型
+    Type tcpip.NetworkProtocolNumber
+}
+
+// Ethernet以太网数据包的封装
+type Ethernet []byte
+
+const (
+    // EthernetMinimumSize以太网帧最小的长度
+    EthernetMinimumSize = 14
+
+    // EthernetAddressSize以太网地址的长度
+    EthernetAddressSize = 6
+)
+
+// SourceAddress从帧头部中得到源地址
+func (b Ethernet) SourceAddress() tcpip.LinkAddress {
+    return tcpip.LinkAddress(b[srcMAC:][:EthernetAddressSize])
+}
+
+// DestinationAddress从帧头部中得到目的地址
+func (b Ethernet) DestinationAddress() tcpip.LinkAddress {
+    return tcpip.LinkAddress(b[dstMAC:][:EthernetAddressSize])
+}
+
+// Type从帧头部中得到协议类型
+func (b Ethernet) Type() tcpip.NetworkProtocolNumber {
+    return tcpip.NetworkProtocolNumber(binary.BigEndian.Uint16(b[ethType:]))
+}
+
+// Encode根据传入的帧头部信息编码成Ethernet二进制形式，注意Ethernet应先分配好内存
+func (b Ethernet) Encode(e *EthernetFields) {
+    binary.BigEndian.PutUint16(b[ethType:], uint16(e.Type))
+    copy(b[srcMAC:][:EthernetAddressSize], e.SrcAddr)
+    copy(b[dstMAC:][:EthernetAddressSize], e.DstAddr)
+}
+```
+
+### 网卡IO的实现
+所谓 io 就是数据的输入输出，对于网卡来说就是接收或发送数据，接收意味着对以太网帧解封装和提交给网络层，发送意味着对上层数据的封装和写入网卡。协议栈定义了链路层的接口如下

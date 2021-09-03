@@ -1,6 +1,10 @@
 package header
 
-import "github.com/impact-eintr/netstack/tcpip"
+import (
+	"encoding/binary"
+
+	"github.com/impact-eintr/netstack/tcpip"
+)
 
 // 以太网帧头部信息的偏移量
 const (
@@ -30,9 +34,23 @@ const (
 )
 
 // 从帧头部获取源地址
+func (b Ethernet) SourceAddress() tcpip.LinkAddress {
+	return tcpip.LinkAddress(b[srcMAC:][:EthernetAddressSize])
+}
 
 // 从帧头部获取目的地址
+func (b Ethernet) DestinationAddress() tcpip.LinkAddress {
+	return tcpip.LinkAddress(b[dstMAC:][:EthernetAddressSize])
+}
 
 // 从帧头部获取协议类型
+func (b Ethernet) Type() tcpip.NetworkProtocolNumber {
+	return tcpip.NetworkProtocolNumber(binary.BigEndian.Uint16(b[ethType:]))
+}
 
 // Encode根据传入的帧头部信息编码成Ethernet二进制形式
+func (b Ethernet) Encode(e *EthernetFields) {
+	binary.BigEndian.PutUint16(b[ethType:], uint16(e.Type))
+	copy(b[srcMAC:][:EthernetAddressSize], e.SrcAddr)
+	copy(b[dstMAC:][:EthernetAddressSize], e.DstAddr)
+}
