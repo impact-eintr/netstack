@@ -1,6 +1,9 @@
 package stack
 
-import "github.com/impact-eintr/netstack/tcpip"
+import (
+	"github.com/impact-eintr/netstack/tcpip"
+	"github.com/impact-eintr/netstack/tcpip/buffer"
+)
 
 // LinkEndpoint是由数据链路层协议(以太 环回 原始)实现的接口
 // 并由网络层协议用于实施者的数据链路端点发送数据包
@@ -40,3 +43,6 @@ const (
 	CapabilityDisconnectOk
 	CapabilityLoopback
 )
+
+type NetworkDispatcher interface {
+}
