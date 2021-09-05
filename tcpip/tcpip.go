@@ -98,3 +98,5 @@ type ProtocolAddr struct {
 	Protocol NetworkProtocolNumber
 	Address  Address
 }
+
+type LinkEndpointID uint64

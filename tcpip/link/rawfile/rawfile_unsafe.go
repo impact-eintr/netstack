@@ -31,7 +31,7 @@ func GetMTU(name string) (uint32, error) {
 
 }
 
-func NonbolockingWrite(fd int, buf []byte) *tcpip.Error {
+func NonBlockingWrite(fd int, buf []byte) *tcpip.Error {
 	var ptr unsafe.Pointer
 	if len(buf) > 0 {
 		ptr = unsafe.Pointer(&buf[0])
@@ -45,9 +45,9 @@ func NonbolockingWrite(fd int, buf []byte) *tcpip.Error {
 	return nil
 }
 
-func NonBolckingWrite2(fd int, b1, b2 []byte) *tcpip.Error {
+func NonBlockingWrite2(fd int, b1, b2 []byte) *tcpip.Error {
 	if len(b2) == 0 {
-		return NonbolockingWrite(fd, b1)
+		return NonBlockingWrite(fd, b1)
 	}
 
 	iovec := [...]syscall.Iovec{

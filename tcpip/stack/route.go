@@ -15,6 +15,9 @@ type Route struct {
 	// 本地网络层地址
 	LocalAddress tcpip.Address
 
+	// 本地网卡MAC地址
+	LocalLinkAddress tcpip.LinkAddress
+
 	// 下一跳网络层地址
 	NextHop tcpip.Address
 

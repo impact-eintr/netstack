@@ -1,6 +1,8 @@
 package stack
 
 import (
+	"sync"
+
 	"github.com/impact-eintr/netstack/tcpip"
 	"github.com/impact-eintr/netstack/tcpip/buffer"
 )
@@ -28,7 +30,7 @@ type LinkEndpoint interface {
 		protocol tcpip.NetworkProtocolNumber) *tcpip.Error
 
 	// 将数据链路层端点附加到协议栈的为那个网络层调度程序
-	Atach(dispatcher NetworkDispatcher)
+	Attach(dispatcher NetworkDispatcher)
 
 	// 是否已经添加了网络调度器
 	IsAttached() bool
@@ -44,5 +46,34 @@ const (
 	CapabilityLoopback
 )
 
+// 包含网络协议栈用于在 数据链路层 处理数据包后将数据包传送到适当网络端点的方法。
 type NetworkDispatcher interface {
+	// deliver 递送
+	DeliverNetworkPacket(linkEP LinkEndpoint, dstLinkAddr, srcLinkAddr tcpip.LinkAddress,
+		protocol tcpip.NetworkProtocolNumber, vv buffer.VectorisedView)
+}
+
+var (
+	// 传输层协议的注册存储结构
+	//transportProtocols = make(map[string]TransportProtocolFactory)
+	// 网络层协议的出册存储结构
+	//networkProtocols   = make(map[string]TransportProtocolFactory)
+	linkEPMu           sync.RWMutex
+	nextLinkEndpointID tcpip.LinkEndpointID = 1
+	// 保存设备号与设备信息
+	linkEndpoints = make(map[tcpip.LinkEndpointID]LinkEndpoint)
+)
+
+// 注册一个链路层设备
+func RegisterLinkEndpoint(linkEP LinkEndpoint) tcpip.LinkEndpointID {
+	linkEPMu.Lock()
+	defer linkEPMu.Unlock()
+
+	v := nextLinkEndpointID
+	nextLinkEndpointID++
+
+	// 进行注册
+	linkEndpoints[v] = linkEP
+	return v
+
 }
