@@ -46,13 +46,6 @@ const (
 	CapabilityLoopback
 )
 
-// 包含网络协议栈用于在 数据链路层 处理数据包后将数据包传送到适当网络端点的方法。
-type NetworkDispatcher interface {
-	// deliver 递送
-	DeliverNetworkPacket(linkEP LinkEndpoint, dstLinkAddr, srcLinkAddr tcpip.LinkAddress,
-		protocol tcpip.NetworkProtocolNumber, vv buffer.VectorisedView)
-}
-
 var (
 	// 传输层协议的注册存储结构
 	//transportProtocols = make(map[string]TransportProtocolFactory)
@@ -76,4 +69,30 @@ func RegisterLinkEndpoint(linkEP LinkEndpoint) tcpip.LinkEndpointID {
 	linkEndpoints[v] = linkEP
 	return v
 
+}
+
+type TransportProtocol interface {
+}
+
+type TransportEndpointID struct {
+	LocalPort     uint16
+	LocalAddress  tcpip.Address
+	RemotePort    uint16
+	RemoteAddress tcpip.Address
+}
+
+type NetworkProtocol interface {
+	//Number() tcpip.NetworkProtocolNumber
+	//MinimumPacketSize() int
+	//ParseAddresses(v buffer.View) (src, dst tcpip.Address)
+}
+
+// 包含网络协议栈用于在 数据链路层 处理数据包后将数据包传送到适当网络端点的方法。
+type NetworkDispatcher interface {
+	// deliver 递送
+	DeliverNetworkPacket(linkEP LinkEndpoint, dstLinkAddr, srcLinkAddr tcpip.LinkAddress,
+		protocol tcpip.NetworkProtocolNumber, vv buffer.VectorisedView)
+}
+
+type LinkAddressResolver interface {
 }

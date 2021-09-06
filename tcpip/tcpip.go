@@ -92,7 +92,13 @@ func ParseMACAddress(s string) (LinkAddress, error) {
 }
 
 type NetworkProtocolNumber uint32
+type TransportProtocolNumber uint32
+
 type Address string
+
+func (a Address) String() string {
+	return ""
+}
 
 type ProtocolAddr struct {
 	Protocol NetworkProtocolNumber
@@ -100,3 +106,80 @@ type ProtocolAddr struct {
 }
 
 type LinkEndpointID uint64
+
+type Stats struct {
+	UnknowProtocolRcvdPackets *StatCounter
+	MalformedRcvdPackets      *StatCounter
+	DroppedPackets            *StatCounter
+	IP                        IPStats
+	TCP                       TCPStats
+	UDP                       UDPStats
+}
+
+type StatCounter struct {
+	count uint64
+}
+
+type IPStats struct {
+	PacketsReceived        *StatCounter
+	InvalidAddressReceived *StatCounter
+	PacketsDelivered       *StatCounter
+	PacketsSent            *StatCounter
+	OutgoingPacketErrors   *StatCounter
+}
+
+type TCPStats struct {
+	ActiveConnectionOpenings  *StatCounter
+	PassiveConnectionOpenings *StatCounter
+	FailedConnectionAttempts  *StatCounter
+	ValidSegmentReveived      *StatCounter
+	InvalidSegmentReveived    *StatCounter
+
+	SegmentsSents  *StatCounter
+	ResetsSent     *StatCounter
+	ResetsReceived *StatCounter
+}
+
+type UDPStats struct {
+	PacketReceived           *StatCounter
+	UnknownPortErrors        *StatCounter
+	ReceiveBufferErrors      *StatCounter
+	MalformedPacketsReceived *StatCounter
+	PacketsSent              *StatCounter
+}
+
+// FullAddress 表示完整的传输节点地址，这是 Connect() 和 Bind() 方法所要求的
+type FullAddress struct {
+	NIC  NICID   // NIC 是这个地址所指的 NIC 的 ID
+	Addr Address // 网络地址
+	Port uint16  // 传输层端口
+}
+
+type NICID int32
+
+// Route 是路由表中的一行。它指定应通过哪些 NIC（和网关）组路由数据包。
+// 如果屏蔽的目标地址与行中的目标地址匹配，则该行被认为是可行的
+type Route struct {
+	Destination Address
+	// 掩码指定目标地址和目标地址的哪些位必须匹配才能使该行可行
+	Mask    AddressMask
+	Gateway Address
+	NIC     NICID
+}
+
+type AddressMask string
+
+func (a AddressMask) String() string {
+	return Address(a).String()
+}
+
+type Subnet struct {
+	address Address
+	mask    AddressMask
+}
+
+// 提供现在时刻的接口
+type Clock interface {
+	NowNanoseconds() int64
+	NowMonoseconds() int64
+}
