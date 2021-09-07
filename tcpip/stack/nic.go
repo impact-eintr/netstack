@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/impact-eintr/netstack/tcpip"
+	"github.com/impact-eintr/netstack/tcpip/ilist"
 )
 
 type referencedNetworkEndpoint struct {
@@ -33,7 +34,24 @@ type NIC struct {
 	promiscuous bool
 	primary     map[tcpip.NetworkProtocolNumber]*ilist.List
 	// 网络层端的记录
-	endpoints map[tcpip.NetworkEndpointID]*referencedNetworkEndpoint
+	endpoints map[NetworkEndpointID]*referencedNetworkEndpoint
 	// 子网的记录
 	subnets []tcpip.Subnet
+}
+
+// 根据参数新建一个NIC
+func newNIC(stack *Stack, id tcpip.NICID, name string, ep LinkEndpoint) *NIC {
+	return &NIC{
+		stack:     stack,
+		id:        id,
+		name:      name,
+		linkEP:    ep,
+		demux:     newTransportDemuxer(stack),
+		primary:   make(map[tcpip.NetworkProtocolNumber]*ilist.List),
+		endpoints: make(map[NetworkEndpointID]*referencedNetworkEndpoint),
+	}
+}
+
+type NetworkEndpointID struct {
+	LocalAddress tcpip.Address
 }

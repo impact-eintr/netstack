@@ -38,9 +38,6 @@ type endpoint struct {
 	views      []buffer.View
 	dispatcher stack.NetworkDispatcher
 
-	// handleLocal indicates whether packets destined to itself should be
-	// handled by the netstack internally (true) or be forwarded to the FD
-	// endpoint (false).
 	// handleLocal指示发往自身的数据包是由内部netstack处理（true）还是转发到FD端点（false）。
 	// Resend packets back to netstack if destined to itself
 	// Add option to redirect packet back to netstack if it's destined to itself.
