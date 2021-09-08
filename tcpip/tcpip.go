@@ -21,13 +21,13 @@ func (err *Error) IgnoreStats() bool {
 }
 
 var (
-	ErrUnknowProtovol        = &Error{msg: "unknown protocol"}
+	ErrUnknowProtocol        = &Error{msg: "unknown protocol"}
 	ErrUnknowNICID           = &Error{msg: "unknown nic id"}
 	ErrUnknowProtocolOption  = &Error{msg: "unknown option for protocol"}
 	ErrDuplicateNICID        = &Error{msg: "duplicate nic id"}
 	ErrDuplicateAddress      = &Error{msg: "duplicate address"}
 	ErrNoRoute               = &Error{msg: "no route"}
-	ErrBadLinkEndPoint       = &Error{msg: "bad link layer endpoint"}
+	ErrBadLinkEndpoint       = &Error{msg: "bad link layer endpoint"}
 	ErrAlreadyBound          = &Error{msg: "endpoint already bound", ignoreStats: true}
 	ErrInvalidEndpointState  = &Error{msg: "endpoint is in invalid state"}
 	ErrAlreadyConnecting     = &Error{msg: "endpoint is already connecting", ignoreStats: true}
@@ -91,7 +91,10 @@ func ParseMACAddress(s string) (LinkAddress, error) {
 
 }
 
+// NetworkProtocolNumber 是网络协议的编号。
 type NetworkProtocolNumber uint32
+
+// TransportProtocolNumber 是传输协议的编号
 type TransportProtocolNumber uint32
 
 type Address string

@@ -23,3 +23,19 @@ type protocolIDs struct {
 	network   tcpip.NetworkProtocolNumber
 	transport tcpip.TransportProtocolNumber
 }
+
+// 新建一个分流器
+func newTransportDemuxer(stack *Stack) *transportDemuxer {
+	d := &transportDemuxer{
+		protocol: make(map[protocolIDs]*transportEndpoints),
+	}
+
+	for netProto := range stack.networkProtocols {
+		for proto := range stack.transportProtocols {
+			d.protocol[protocolIDs{netProto, proto}] = &transportEndpoints{
+				endpoints: make(map[TransportEndpointID]*transportEndpoints),
+			}
+		}
+	}
+	return d
+}
