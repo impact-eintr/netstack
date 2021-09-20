@@ -8,6 +8,19 @@ import (
 	"github.com/impact-eintr/netstack/tcpip/ilist"
 )
 
+type PrimaryEndpointBehavior int
+
+const (
+	// CanBePrimaryEndpoint 指示端点可以用作没有本地地址的新连接的主要端点。
+	// 这是调用 NIC.AddAddress 时的默认值
+	CanBePrimaryEndpoint PrimaryEndpointBehavior = iota
+	// FirstPrimaryEndpoint 指示终点应该是第一个考虑的主要终点。
+	// 如果有多个具有此行为的端点，则最近添加的端点将是第一个。
+	FirstPrimaryEndpoint
+	// NeverPrimaryEndpoint 指示端点不应是主要端点
+	NeverPrimaryEndpoint
+)
+
 // referenced 引用的
 type referencedNetworkEndpoint struct {
 	ilist.Entry // 一個侵入式链表
@@ -35,8 +48,9 @@ type NIC struct {
 	// 传输层的解复用
 	demux *transportDemuxer
 
-	mu          sync.RWMutex
-	spoofing    bool
+	mu       sync.RWMutex
+	spoofing bool
+	// 是指一台机器的网卡能够接收所有经过它的数据流，而不论其目的地址是否是它。
 	promiscuous bool
 	primary     map[tcpip.NetworkProtocolNumber]*ilist.List
 	// 网络层端的记录
@@ -101,11 +115,29 @@ func (n *NIC) addAddressLocked(protocol tcpip.NetworkProtocolNumber, addr tcpip.
 		holdsInserRef: true,
 	}
 
+	// 检测是否需要进行地址解析
+	// 如果此协议存在链接地址解析，则设置缓存
 	if n.linkEP.Capabilities()&CapabilityResolutionRequired != 0 {
-
+		if _, ok := n.stack.linkAddrResolvers[protocol]; ok {
+			ref.linkCache = n.stack
+		}
 	}
 
 	// 注册该网络端
+	n.endpoints[id] = ref
+
+	l, ok := n.primary[protocol]
+	if !ok {
+		l = &ilist.List{}
+		n.primary[protocol] = l
+	}
+	switch peb {
+	case CanBePrimaryEndpoint:
+		l.PushBack(ref)
+	case FirstPrimaryEndpoint:
+		l.PushFront(ref)
+	}
+	return ref, nil
 
 }
 
