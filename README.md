@@ -283,7 +283,6 @@ tap0      Link encap:Ethernet  HWaddr 22:e2:f2:93:ff:bf
  
 ```
 
-         
 
 删除网卡可以使用如下命令：
 
