@@ -1,3 +1,3 @@
-module tcpip
+module netstack
 
 go 1.18
