@@ -36,6 +36,17 @@ type pollEvent struct {
 	revents int16
 }
 
+func NonBlockingWrite(fd int, buf []byte) *tcpip.Error {
+	var ptr unsafe.Pointer
+	if len(buf) > 0 {
+		ptr = unsafe.Pointer(&buf[0])
+	}
+}
+
+func NonBlockingWrite2(fd int, b1, b2 []byte) *tcpip.Error {
+
+}
+
 func BlockingRead(fd int, b []byte) (int, *tcpip.Error) {
 	for {
 		n, _, e := syscall.RawSyscall(syscall.SYS_READ, uintptr(fd),
