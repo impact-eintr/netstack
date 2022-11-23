@@ -27,7 +27,7 @@ type Ethernet []byte
 
 const (
 	// EthernetMinimumSize以太网帧最小的长度
-	EthernetMinimumSize = 14
+	EthernetMinimumSize = 14 // 6 + 6 + 2
 
 	// EthernetAddressSize以太网地址的长度
 	EthernetAddressSize = 6

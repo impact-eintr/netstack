@@ -27,7 +27,7 @@ type endpoint struct {
 
 	closed func(*tcpip.Error)
 
-	iovers []syscall.Iovec
+	iovecs []syscall.Iovec
 	views []buffer.View
 	dispatcher stack.NetworkDispatcher
 
@@ -73,7 +73,7 @@ func New(opts *Options) tcpip.LinkEndpointID {
 		addr: opts.Address,
 		hdrSize: header.EthernetMinimumSize,
 		views: make([]buffer.View, len(BufConfig)),
-		iovers: make([]syscall.Iovec, len(BufConfig)),
+		iovecs: make([]syscall.Iovec, len(BufConfig)),
 		handleLocal: opts.HandleLocal,
 	}
 
@@ -128,8 +128,9 @@ func (e *endpoint)	WritePacket(r *stack.Route, hdr buffer.Prependable,
 	eth.Encode(ethHdr) // 将以太帧信息作为报文头编入
 	// 写入网卡中
 	if payload.Size() == 0 {
-		return rawfile
+		return rawfile.NonBlockingWrite(e.fd, hdr.View())
 	}
+	return rawfile.NonBlockingWrite2(e.fd, hdr.View(), payload.ToView())
 }
 
 // Attach 启动从文件描述符中读取数据包的goroutine,并通过提供的分发函数来分发数据报
@@ -141,4 +142,83 @@ func (e *endpoint)	Attach(dispatcher stack.NetworkDispatcher) {
 
 func (e *endpoint)	IsAttached() bool {
 	return e.dispatcher != nil
+}
+
+// 截取需要的内容
+func (e *endpoint) capViews(n int, buffers []int) int {
+	c := 0
+	for i, s := range buffers {
+		c += s
+		if c >= n {
+			e.views[i].CapLength(s - (c - n))
+			return i + 1
+		}
+	}
+	return len(buffers)
+}
+
+// 按照bufConfig的长度分配内存大小
+// 注意e.views 和 e.iovecs共用相同的内存块
+func (e *endpoint) allocateViews(bufConfig []int) {
+	for i, v := range e.views {
+		if v != nil {
+			break
+		}
+		b := buffer.NewView(bufConfig[i]) // 分配内存
+		e.views[i] = b
+		e.iovecs[i] = syscall.Iovec{
+			Base: &b[0],
+			Len: uint64(len(b)),
+		}
+	}
+}
+
+func (e *endpoint) dispatch() (bool, *tcpip.Error) {
+	// 读取数据缓存的分配
+	e.allocateViews(BufConfig)
+
+	// 从网卡读取数据
+	n, err := rawfile.BlockingReadv(e.fd, e.iovecs) // 读到ioves中相当于读到views中
+	if err != nil {
+		return false, err
+	}
+	if n <= e.hdrSize {
+		return false, nil // 读到的数据比头部还小 直接丢弃
+	}
+
+	var (
+		p tcpip.NetworkProtocolNumber
+		remoteLinkAddr, localLinkAddr tcpip.LinkAddress // 目标MAC 源MAC
+	)
+	// 获取以太网头部信息
+	eth := header.Ethernet(e.views[0])
+	p = eth.Type()
+	remoteLinkAddr = eth.SourceAddress()
+	localLinkAddr = eth.DestinationAddress()
+
+	used := e.capViews(n, BufConfig) // 从缓存中截有效的内容
+	vv := buffer.NewVectorisedView(n, e.views[:used]) // 用这些有效的内容构建vv
+	vv.TrimFront(e.hdrSize) // 将数据内容删除以太网头部信息 将网络层作为数据头
+
+	e.dispatcher.DeliverNetworkPacket(e, remoteLinkAddr, localLinkAddr, p, vv)
+
+	// 将分发后的数据无效化(设置nil可以让gc回收这些内存)
+	for i := 0;i < used;i++ {
+		e.views[i] = nil
+	}
+
+	return true, nil
+}
+
+// 循环地从fd中读取数据 然后就爱那个数据报分发给协议栈
+func (e *endpoint) dispatchLoop() *tcpip.Error {
+	for {
+		cont, err := e.dispatch()
+		if err != nil || !cont {
+			if e.closed != nil {
+				e.closed(err)
+			}
+			return err
+		}
+	}
 }

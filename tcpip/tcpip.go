@@ -1,5 +1,10 @@
 package tcpip
 
+import (
+	"fmt"
+	"strings"
+)
+
 
 type Error struct {
 	msg string
@@ -51,10 +56,68 @@ var (
 	ErrNoBufferSpace         = &Error{msg: "no buffer space available"}
 )
 
+type Address string
 
+type AddressMask string
+
+func (a AddressMask) String() string {
+	return Address(a).String()
+}
 
 // LinkAddress 是一个字节切片，转换为表示链接地址的字符串。
 // 它通常是一个 6 字节的 MAC 地址。
 type LinkAddress string // MAC地址
 
+type LinkEndpointID uint64
+
+type TransportProtocolNumber uint32
+
 type NetworkProtocolNumber uint32
+
+
+func (a Address) String() string {
+	switch len(a) {
+	case 4:
+		fmt.Println(string(a))
+		return fmt.Sprintf("%d.%d.%d.%d", int(a[0]), int(a[1]), int(a[2]), int(a[3]))
+	case 16:
+		fmt.Println(string(a))
+		// Find the longest subsequence of hexadecimal zeros.
+		start, end := -1, -1
+		for i := 0; i < len(a); i += 2 {
+			j := i
+			for j < len(a) && a[j] == 0 && a[j+1] == 0 {
+				j += 2
+			}
+			if j > i+2 && j-i > end-start {
+				start, end = i, j
+			}
+		}
+		var b strings.Builder
+		for i := 0; i < len(a); i += 2 {
+			if i == start {
+				b.WriteString("::")
+				i = end
+				if end >= len(a) {
+					break
+				}
+			} else if i > 0 {
+				b.WriteByte(':')
+			}
+			v := uint16(a[i+0])<<8 | uint16(a[i+1])
+			if v == 0 {
+				b.WriteByte('0')
+			} else {
+				const digits = "0123456789abcdef"
+				for i := uint(3); i < 4; i-- {
+					if v := v >> (i * 4); v != 0 {
+						b.WriteByte(digits[v&0xf])
+					}
+				}
+			}
+		}
+		return b.String()
+	default:
+		return fmt.Sprintf("%x", []byte(a))
+	}
+}

@@ -41,10 +41,46 @@ func NonBlockingWrite(fd int, buf []byte) *tcpip.Error {
 	if len(buf) > 0 {
 		ptr = unsafe.Pointer(&buf[0])
 	}
+
+	_, _, e := syscall.RawSyscall(syscall.SYS_WRITE, uintptr(fd),
+		uintptr(ptr), uintptr(len(buf)))
+	if e != 0 {
+		return TranslateErrno(e)
+	}
+	return nil
 }
 
 func NonBlockingWrite2(fd int, b1, b2 []byte) *tcpip.Error {
+	if len(b2) == 0 {
+		return NonBlockingWrite(fd, b1)
+	}
+	/*
+	   #include <sys/uio.h>
 
+	   struct iovec {
+	     void *iov_base;
+	     size_t iov_len;
+	   };
+	  **/
+	iovec := [...]syscall.Iovec{
+		{
+			Base: &b1[0],
+			Len: uint64(len(b1)),
+		},
+		{
+			Base: &b2[0],
+			Len: uint64(len(b2)),
+		},
+	}
+
+	// ssize_t writev(int fildes, const struct iovec *iov, int iovcnt);
+	_, _, e := syscall.RawSyscall(syscall.SYS_WRITEV, uintptr(fd),
+		uintptr(unsafe.Pointer(&iovec[0])), uintptr(len(iovec)))
+	if e != 0 {
+		return TranslateErrno(e)
+	}
+
+	return nil
 }
 
 func BlockingRead(fd int, b []byte) (int, *tcpip.Error) {
@@ -69,7 +105,8 @@ func BlockingRead(fd int, b []byte) (int, *tcpip.Error) {
 
 func BlockingReadv(fd int, iovecs []syscall.Iovec) (int, *tcpip.Error) {
 	for {
-		n, _, e := syscall.RawSyscall(syscall.SYS_READV, uintptr(fd), uintptr(unsafe.                 Pointer(&iovecs[0])), uintptr(len(iovecs)))
+		n, _, e := syscall.RawSyscall(syscall.SYS_READV, uintptr(fd),
+			uintptr(unsafe.Pointer(&iovecs[0])), uintptr(len(iovecs)))
 		if e == 0 {
 			return int(n), nil
 		}
