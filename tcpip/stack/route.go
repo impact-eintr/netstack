@@ -24,5 +24,5 @@ type Route struct {
 	NetProto tcpip.NetworkProtocolNumber
 
 	// 相关的网络终端
-	ref *referenceNetworkEndpoint
+	//ref *referenceNetworkEndpoint
 }

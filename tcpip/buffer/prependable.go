@@ -28,5 +28,5 @@ func (p *Prependable) Prepend(size int) []byte {
 		return nil
 	}
 	p.usedIdx -= size
-	return p.View()[:size:size] // p.buf[p.usedIdx:size:size]
+	return p.View()[:size:size] // p.buf[p.usedIdx:p.usedIdx+size:size]
 }

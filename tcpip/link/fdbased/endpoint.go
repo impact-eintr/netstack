@@ -134,7 +134,7 @@ func (e *endpoint)	WritePacket(r *stack.Route, hdr buffer.Prependable,
 }
 
 // Attach 启动从文件描述符中读取数据包的goroutine,并通过提供的分发函数来分发数据报
-func (e *endpoint)	Attach(dispatcher stack.NetworkDispatcher) {
+func (e *endpoint) Attach(dispatcher stack.NetworkDispatcher) {
 	e.dispatcher = dispatcher
 	// 链接端点不可靠。保存传输端点后，它们将停止发送传出数据包，并拒绝所有传入数据包。
 	go e.dispatchLoop()
@@ -210,13 +210,13 @@ func (e *endpoint) dispatch() (bool, *tcpip.Error) {
 	return true, nil
 }
 
-// 循环地从fd中读取数据 然后就爱那个数据报分发给协议栈
+// 循环地从fd中读取数据 然后将数据报分发给协议栈
 func (e *endpoint) dispatchLoop() *tcpip.Error {
 	for {
 		cont, err := e.dispatch()
 		if err != nil || !cont {
 			if e.closed != nil {
-				e.closed(err)
+				e.closed(err) // 阻塞中
 			}
 			return err
 		}
