@@ -12,9 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// +build amd64
+//go:build amd64
 
 package sleep
 
+import "sync/atomic"
+
 // See commit_noasm.go for a description of commitSleep.
-func commitSleep(g uintptr, waitingG *uintptr) bool
+func commitSleep(g uintptr, waitingG *uintptr) bool {
+	for {
+		// Check if the wait was aborted.
+		if atomic.LoadUintptr(waitingG) == 0 {
+			return false
+		}
+
+		// Try to store the G so that wakers know who to wake.
+		if atomic.CompareAndSwapUintptr(waitingG, preparingG, g) {
+			return true
+		}
+	}
+}
