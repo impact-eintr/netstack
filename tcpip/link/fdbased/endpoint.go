@@ -10,7 +10,7 @@ import (
 )
 
 // 从NIC读取数据的多级缓存配置
-var BufConfig = []int{1<<7, 1<<8, 1<<8, 1<<9, 1<<10, 1<<11, 1<<12, 1<<13, 1<<14, 1<<15}
+var BufConfig = []int{1 << 7, 1 << 8, 1 << 8, 1 << 9, 1 << 10, 1 << 11, 1 << 12, 1 << 13, 1 << 14, 1 << 15}
 
 // 负责底层网卡的io读写以及数据分发
 type endpoint struct {
@@ -27,8 +27,8 @@ type endpoint struct {
 
 	closed func(*tcpip.Error)
 
-	iovecs []syscall.Iovec
-	views []buffer.View
+	iovecs     []syscall.Iovec
+	views      []buffer.View
 	dispatcher stack.NetworkDispatcher
 
 	// handleLocal指示发往自身的数据包是由内部netstack处理（true）还是转发到FD端点（false）
@@ -36,10 +36,10 @@ type endpoint struct {
 }
 
 type Options struct {
-	FD int
-	MTU uint32
-	ClosedFunc func(*tcpip.Error)
-	Address tcpip.LinkAddress
+	FD                 int
+	MTU                uint32
+	ClosedFunc         func(*tcpip.Error)
+	Address            tcpip.LinkAddress
 	ResolutionRequired bool
 	SaveRestore        bool
 	ChecksumOffload    bool
@@ -66,14 +66,14 @@ func New(opts *Options) tcpip.LinkEndpointID {
 	}
 
 	e := &endpoint{
-		fd: opts.FD,
-		mtu: opts.MTU,
-		caps: caps,
-		closed: opts.ClosedFunc,
-		addr: opts.Address,
-		hdrSize: header.EthernetMinimumSize,
-		views: make([]buffer.View, len(BufConfig)),
-		iovecs: make([]syscall.Iovec, len(BufConfig)),
+		fd:          opts.FD,
+		mtu:         opts.MTU,
+		caps:        caps,
+		closed:      opts.ClosedFunc,
+		addr:        opts.Address,
+		hdrSize:     header.EthernetMinimumSize,
+		views:       make([]buffer.View, len(BufConfig)),
+		iovecs:      make([]syscall.Iovec, len(BufConfig)),
 		handleLocal: opts.HandleLocal,
 	}
 
@@ -81,7 +81,7 @@ func New(opts *Options) tcpip.LinkEndpointID {
 	return stack.RegisterLinkEndpoint(e)
 }
 
-func (e *endpoint)	MTU() uint32 {
+func (e *endpoint) MTU() uint32 {
 	return e.mtu
 }
 
@@ -90,18 +90,18 @@ func (e *endpoint) Capabilities() stack.LinkEndpointCapabilities {
 }
 
 // 返回当前以太网头部信息长度
-func (e *endpoint)	MaxHeaderLength() uint16 {
+func (e *endpoint) MaxHeaderLength() uint16 {
 	return uint16(e.hdrSize)
 }
 
 // 返回当前MAC地址
-func (e *endpoint)	LinkAddress() tcpip.LinkAddress {
+func (e *endpoint) LinkAddress() tcpip.LinkAddress {
 	return e.addr
 }
 
 // 将上层的报文经过链路层封装，写入网卡中，如果写入失败则丢弃该报文
-func (e *endpoint)	WritePacket(r *stack.Route, hdr buffer.Prependable,
-	payload buffer.VectorisedView,	protocol tcpip.NetworkProtocolNumber) *tcpip.Error {
+func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable,
+	payload buffer.VectorisedView, protocol tcpip.NetworkProtocolNumber) *tcpip.Error {
 	// 如果目标地址是设备自己 那么将报文重新返回给协议栈
 	if e.handleLocal && r.LocalAddress != "" && r.LocalAddress == r.RemoteAddress {
 		views := make([]buffer.View, 1, 1+len(payload.Views()))
@@ -114,9 +114,9 @@ func (e *endpoint)	WritePacket(r *stack.Route, hdr buffer.Prependable,
 	}
 	// 封装增加以太网头部
 	eth := header.Ethernet(hdr.Prepend(header.EthernetMinimumSize)) // 分配14B的内存
-	ethHdr := &header.EthernetFields{ // 配置以太帧信息
+	ethHdr := &header.EthernetFields{                               // 配置以太帧信息
 		DstAddr: r.RemoteLinkAddress,
-		Type: protocol,
+		Type:    protocol,
 	}
 	// 如果路由信息中有配置源MAC地址，那么使用该地址
 	// 如果没有，则使用本网卡的地址
@@ -140,7 +140,7 @@ func (e *endpoint) Attach(dispatcher stack.NetworkDispatcher) {
 	go e.dispatchLoop()
 }
 
-func (e *endpoint)	IsAttached() bool {
+func (e *endpoint) IsAttached() bool {
 	return e.dispatcher != nil
 }
 
@@ -168,7 +168,7 @@ func (e *endpoint) allocateViews(bufConfig []int) {
 		e.views[i] = b
 		e.iovecs[i] = syscall.Iovec{
 			Base: &b[0],
-			Len: uint64(len(b)),
+			Len:  uint64(len(b)),
 		}
 	}
 }
@@ -187,7 +187,7 @@ func (e *endpoint) dispatch() (bool, *tcpip.Error) {
 	}
 
 	var (
-		p tcpip.NetworkProtocolNumber
+		p                             tcpip.NetworkProtocolNumber
 		remoteLinkAddr, localLinkAddr tcpip.LinkAddress // 目标MAC 源MAC
 	)
 	// 获取以太网头部信息
@@ -196,14 +196,14 @@ func (e *endpoint) dispatch() (bool, *tcpip.Error) {
 	remoteLinkAddr = eth.SourceAddress()
 	localLinkAddr = eth.DestinationAddress()
 
-	used := e.capViews(n, BufConfig) // 从缓存中截有效的内容
+	used := e.capViews(n, BufConfig)                  // 从缓存中截有效的内容
 	vv := buffer.NewVectorisedView(n, e.views[:used]) // 用这些有效的内容构建vv
-	vv.TrimFront(e.hdrSize) // 将数据内容删除以太网头部信息 将网络层作为数据头
+	vv.TrimFront(e.hdrSize)                           // 将数据内容删除以太网头部信息 将网络层作为数据头
 
 	e.dispatcher.DeliverNetworkPacket(e, remoteLinkAddr, localLinkAddr, p, vv)
 
 	// 将分发后的数据无效化(设置nil可以让gc回收这些内存)
-	for i := 0;i < used;i++ {
+	for i := 0; i < used; i++ {
 		e.views[i] = nil
 	}
 

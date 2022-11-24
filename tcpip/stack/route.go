@@ -11,7 +11,6 @@ type Route struct {
 	// 远端网卡MAC地址
 	RemoteLinkAddress tcpip.LinkAddress
 
-
 	// 本地网络层地址 ipv4 or ipv6 地址
 	LocalAddress tcpip.Address
 	// 本地网卡MAC地址
@@ -24,5 +23,5 @@ type Route struct {
 	NetProto tcpip.NetworkProtocolNumber
 
 	// 相关的网络终端
-	//ref *referenceNetworkEndpoint
+	ref *referencedNetworkEndpoint
 }

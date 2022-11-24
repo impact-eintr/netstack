@@ -5,9 +5,8 @@ import (
 	"strings"
 )
 
-
 type Error struct {
-	msg string
+	msg         string
 	ignoreStats bool
 }
 
@@ -56,12 +55,32 @@ var (
 	ErrNoBufferSpace         = &Error{msg: "no buffer space available"}
 )
 
+// Clock 提供当前的时间戳
+type Clock interface {
+	NowNanoseconds() int64
+
+	NowMonotonic() int64
+}
+
+// 地址是一个字节切片，转换为表示网络节点地址的字符串。或者，在 unix 端点的情况下，它可能代表一条路径
 type Address string
 
 type AddressMask string
 
+// 传输层的完整地址
+type FullAddress struct {
+	NIC  NICID   // NICID
+	Addr Address // IP Address
+	Port uint16  // transport Port
+}
+
 func (a AddressMask) String() string {
 	return Address(a).String()
+}
+
+type Subnet struct {
+	address Address
+	mask    AddressMask
 }
 
 // LinkAddress 是一个字节切片，转换为表示链接地址的字符串。
@@ -74,6 +93,19 @@ type TransportProtocolNumber uint32
 
 type NetworkProtocolNumber uint32
 
+type NICID int32
+
+type Route struct {
+	Destination Address     // 目标地址
+	Mask        AddressMask // 掩码
+	Gateway     Address     // 网关
+	MIC         NICID       // 使用的网卡设备
+}
+
+// Stats 包含了网络栈的统计信息
+type Stats struct {
+	// TODO 需要添加
+}
 
 func (a Address) String() string {
 	switch len(a) {

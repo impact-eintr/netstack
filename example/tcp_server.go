@@ -12,7 +12,7 @@ type TCPHandler interface {
 	Handle(net.Conn)
 }
 
-func TCPServer(listener net.Listener, handler TCPHandler, logf lg.AppLogFunc) error {
+func TCPServer(listener net.Listener, handler TCPHandler) error {
 	log.Printf("TCP: listening on %s", listener.Addr())
 
 	for {

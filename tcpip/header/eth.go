@@ -6,8 +6,8 @@ import (
 )
 
 const (
-	dstMAC = 0
-	srcMAC = 6
+	dstMAC  = 0
+	srcMAC  = 6
 	ethType = 12
 )
 
@@ -19,6 +19,7 @@ type EthernetFields struct {
 	DstAddr tcpip.LinkAddress
 
 	// 协议类型
+	// Type = 0x8000 IPv4 Type = 0x8060 = ARP
 	Type tcpip.NetworkProtocolNumber
 }
 
