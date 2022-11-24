@@ -108,12 +108,11 @@ type Stats struct {
 }
 
 func (a Address) String() string {
+	fmt.Println(string(a), len(a))
 	switch len(a) {
 	case 4:
-		fmt.Println(string(a))
 		return fmt.Sprintf("%d.%d.%d.%d", int(a[0]), int(a[1]), int(a[2]), int(a[3]))
 	case 16:
-		fmt.Println(string(a))
 		// Find the longest subsequence of hexadecimal zeros.
 		start, end := -1, -1
 		for i := 0; i < len(a); i += 2 {

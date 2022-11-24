@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"log"
 	"netstack/tcpip"
 	"netstack/tcpip/ports"
 	"sync"
@@ -48,6 +49,31 @@ type Stack struct {
 	clock tcpip.Clock
 }
 
+func New(network []string) *Stack {
+	s := &Stack{
+		transportProtocols: make(map[tcpip.TransportProtocolNumber]*transportProtocolState),
+		networkProtocols:   make(map[tcpip.NetworkProtocolNumber]NetworkProtocol),
+		linkAddrResolvers:  make(map[tcpip.NetworkProtocolNumber]LinkAddressResolver),
+		nics:               make(map[tcpip.NICID]*NIC),
+	}
+
+	// 添加指定的网络端协议 必须已经在init中注册过
+	for _, name := range network {
+		// 先检查这个网络协议是否注册过工厂方法
+		netProtoFactory, ok := networkProtocols[name]
+		if !ok {
+			log.Println(name)
+			continue // 没有就略过
+		}
+		netProto := netProtoFactory()                    // 制造一个该型号协议的示实例
+		s.networkProtocols[netProto.Number()] = netProto // 注册该型号的网络协议
+	}
+
+	// 添加指定的传输层协议 必已经在init中注册过
+	// TODO
+	return s
+}
+
 func (s *Stack) CreateNIC(id tcpip.NICID, linkEP tcpip.LinkEndpointID) *tcpip.Error {
 	return s.createNIC(id, "", linkEP, true)
 }
@@ -66,10 +92,30 @@ func (s *Stack) createNIC(id tcpip.NICID, name string, linkEP tcpip.LinkEndpoint
 	if _, ok := s.nics[id]; ok {
 		return tcpip.ErrDuplicateNICID
 	}
-	n := newIC(s, id, name, ep)
+	n := newNIC(s, id, name, ep)
 
 	s.nics[id] = n
 	if enable {
 		n.attachLinkEndpoint()
 	}
+
+	return nil
+}
+
+// 给网卡添加ip地址
+func (s *Stack) AddAddress(id tcpip.NICID, protocol tcpip.NetworkProtocolNumber, addr tcpip.Address) *tcpip.Error {
+	return s.AddAddressWithOptions(id, protocol, addr, CanBePrimaryEndpoint)
+}
+
+func (s *Stack) AddAddressWithOptions(id tcpip.NICID, protocol tcpip.NetworkProtocolNumber,
+	addr tcpip.Address, peb PrimaryEndpointBehavior) *tcpip.Error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	nic := s.nics[id]
+	if nic == nil {
+		return tcpip.ErrUnknownNICID
+	}
+
+	return nic.AddAddressWithOptions(protocol, addr, peb)
 }

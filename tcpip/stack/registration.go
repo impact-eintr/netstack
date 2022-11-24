@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"log"
 	"netstack/ilist"
 	"netstack/sleep"
 	"netstack/tcpip"
@@ -89,9 +90,16 @@ type NetworkDispatcher interface {
 
 type LinkEndpointCapabilities uint
 
+// type TransportProtocolFactory func() TransportProtocol TODO
+
+type NetworkProtocolFactory func() NetworkProtocol
+
 var (
+	// 以下两个map需要在init函数中注册
 	// 传输层协议的注册存储结构 TODO
-	// 网络层协议的注册存储结构 TODO
+	//transportProtocols = make(map[string]TransportProtocolFactory)
+	// 网络层协议的注册存储结构
+	networkProtocols = make(map[string]NetworkProtocolFactory)
 
 	linkEPMu           sync.RWMutex
 	nextLinkEndpointID tcpip.LinkEndpointID = 1
@@ -100,7 +108,8 @@ var (
 
 // ==============================网络层相关==============================
 type NetworkProtocol interface {
-	// TODO 需要添加
+	Number() tcpip.NetworkProtocolNumber
+	// todo 需要添加
 }
 
 // NetworkEndpoint是需要由网络层协议（例如，ipv4，ipv6）的端点实现的接口
@@ -108,7 +117,7 @@ type NetworkEndpoint interface {
 	// TODO 需要添加
 }
 
-type NetworkEndpoingID struct {
+type NetworkEndpointID struct {
 	LocalAddress tcpip.Address
 }
 
@@ -145,6 +154,12 @@ type referencedNetworkEndpoint struct {
 	// endpoint. It is reset to false when RemoveAddress is called on the
 	// NIC.
 	holdsInsertRef bool
+}
+
+// 注册一个新的网络协议工厂
+func RegisterNetworkProtocolFactory(name string, p NetworkProtocolFactory) {
+	networkProtocols[name] = p
+	log.Println(networkProtocols)
 }
 
 // 注册一个链路层设备
