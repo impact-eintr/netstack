@@ -1,8 +1,6 @@
 package stack
 
 import (
-	"log"
-	"netstack/ilist"
 	"netstack/sleep"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
@@ -108,13 +106,70 @@ var (
 
 // ==============================网络层相关==============================
 type NetworkProtocol interface {
+	// 网络协议版本号
 	Number() tcpip.NetworkProtocolNumber
-	// todo 需要添加
+
+	// MinimumPacketSize returns the minimum valid packet size of this
+	// network protocol. The stack automatically drops any packets smaller
+	// than this targeted at this protocol.
+	MinimumPacketSize() int
+
+	// ParsePorts returns the source and destination addresses stored in a
+	// packet of this protocol.
+	ParseAddresses(v buffer.View) (src, dst tcpip.Address)
+
+	// 新建一个网络终端 比如 ipv4 或者 ipv6 的一个实现
+	NewEndpoint(nicid tcpip.NICID, addr tcpip.Address, linkAddrCache LinkAddressCache,
+		dispatcher TransportDispatcher, sender LinkEndpoint) (NetworkEndpoint, *tcpip.Error)
+
+	// SetOption allows enabling/disabling protocol specific features.
+	// SetOption returns an error if the option is not supported or the
+	// provided option value is invalid.
+	SetOption(option interface{}) *tcpip.Error
+
+	// Option allows retrieving protocol specific option values.
+	// Option returns an error if the option is not supported or the
+	// provided option value is invalid.
+	Option(option interface{}) *tcpip.Error
 }
 
 // NetworkEndpoint是需要由网络层协议（例如，ipv4，ipv6）的端点实现的接口
 type NetworkEndpoint interface {
-	// TODO 需要添加
+	// DefaultTTL is the default time-to-live value (or hop limit, in ipv6)
+	// for this endpoint.
+	DefaultTTL() uint8
+
+	// MTU is the maximum transmission unit for this endpoint. This is
+	// generally calculated as the MTU of the underlying data link endpoint
+	// minus the network endpoint max header length.
+	MTU() uint32
+
+	// Capabilities returns the set of capabilities supported by the
+	// underlying link-layer endpoint.
+	Capabilities() LinkEndpointCapabilities
+
+	// MaxHeaderLength returns the maximum size the network (and lower
+	// level layers combined) headers can have. Higher levels use this
+	// information to reserve space in the front of the packets they're
+	// building.
+	MaxHeaderLength() uint16
+
+	// WritePacket writes a packet to the given destination address and
+	// protocol.
+	WritePacket(r *Route, hdr buffer.Prependable, payload buffer.VectorisedView, protocol tcpip.TransportProtocolNumber, ttl uint8) *tcpip.Error
+
+	// ID returns the network protocol endpoint ID.
+	ID() *NetworkEndpointID
+
+	// NICID returns the id of the NIC this endpoint belongs to.
+	NICID() tcpip.NICID
+
+	// HandlePacket is called by the link layer when new packets arrive to
+	// this network endpoint.
+	HandlePacket(r *Route, vv buffer.VectorisedView)
+
+	// Close is called when the endpoint is reomved from a stack.
+	Close()
 }
 
 type NetworkEndpointID struct {
@@ -137,29 +192,16 @@ type TransportEndpoint interface {
 }
 
 // TODO 需要解读
-type referencedNetworkEndpoint struct {
-	ilist.Entry
-	refs     int32
-	ep       NetworkEndpoint
-	nic      *NIC
-	protocol tcpip.NetworkProtocolNumber
+type TransportProtocol interface {
+}
 
-	// linkCache is set if link address resolution is enabled for this
-	// protocol. Set to nil otherwise.
-	linkCache LinkAddressCache
-	linkAddrCache
-
-	// holdsInsertRef is protected by the NIC's mutex. It indicates whether
-	// the reference count is biased by 1 due to the insertion of the
-	// endpoint. It is reset to false when RemoveAddress is called on the
-	// NIC.
-	holdsInsertRef bool
+// TODO 需要解读
+type TransportDispatcher interface {
 }
 
 // 注册一个新的网络协议工厂
 func RegisterNetworkProtocolFactory(name string, p NetworkProtocolFactory) {
 	networkProtocols[name] = p
-	log.Println(networkProtocols)
 }
 
 // 注册一个链路层设备

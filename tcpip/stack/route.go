@@ -25,3 +25,15 @@ type Route struct {
 	// 相关的网络终端
 	ref *referencedNetworkEndpoint
 }
+
+// 根据参数新建一个路由，并关联一个网络层端
+func makeRoute(netProto tcpip.NetworkProtocolNumber, localAddr, remoteAddr tcpip.Address,
+	localLinkAddr tcpip.LinkAddress, ref *referencedNetworkEndpoint) Route {
+	return Route{
+		NetProto:         netProto,
+		LocalAddress:     localAddr,
+		LocalLinkAddress: localLinkAddr,
+		RemoteAddress:    remoteAddr,
+		ref:              ref,
+	}
+}

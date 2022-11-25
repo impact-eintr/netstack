@@ -11,10 +11,10 @@ type Element interface {
 	Linker
 }
 
-type ElementMapper struct {}
+type ElementMapper struct{}
 
 func (ElementMapper) linkerFor(elem Element) Linker {
-	return elem;
+	return elem
 }
 
 type List struct {
@@ -29,6 +29,10 @@ func (l *List) Reset() {
 
 func (l *List) Empty() bool {
 	return l.head == nil
+}
+
+func (l *List) Front() Element {
+	return l.head
 }
 
 func (l *List) Back() Element {

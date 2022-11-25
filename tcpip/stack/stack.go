@@ -1,7 +1,7 @@
 package stack
 
 import (
-	"log"
+	"netstack/sleep"
 	"netstack/tcpip"
 	"netstack/tcpip/ports"
 	"sync"
@@ -49,12 +49,32 @@ type Stack struct {
 	clock tcpip.Clock
 }
 
-func New(network []string) *Stack {
+// Options contains optional Stack configuration.
+type Options struct {
+	// Clock is an optional clock source used for timestampping packets.
+	//
+	// If no Clock is specified, the clock source will be time.Now.
+	Clock tcpip.Clock
+
+	// Stats are optional statistic counters.
+	Stats tcpip.Stats
+}
+
+func New(network []string, transport []string, opts Options) *Stack {
+	clock := opts.Clock
+	if clock == nil {
+		clock = &tcpip.StdClock{}
+	}
+
 	s := &Stack{
 		transportProtocols: make(map[tcpip.TransportProtocolNumber]*transportProtocolState),
 		networkProtocols:   make(map[tcpip.NetworkProtocolNumber]NetworkProtocol),
 		linkAddrResolvers:  make(map[tcpip.NetworkProtocolNumber]LinkAddressResolver),
 		nics:               make(map[tcpip.NICID]*NIC),
+		//linkAddrCache:      newLinkAddrCache(ageLimit, resolutionTimeout, resolutionAttempts),
+		//PortManager:        ports.NewPortManager(),
+		clock: clock,
+		stats: opts.Stats.FillIn(),
 	}
 
 	// 添加指定的网络端协议 必须已经在init中注册过
@@ -62,7 +82,6 @@ func New(network []string) *Stack {
 		// 先检查这个网络协议是否注册过工厂方法
 		netProtoFactory, ok := networkProtocols[name]
 		if !ok {
-			log.Println(name)
 			continue // 没有就略过
 		}
 		netProto := netProtoFactory()                    // 制造一个该型号协议的示实例
@@ -118,4 +137,60 @@ func (s *Stack) AddAddressWithOptions(id tcpip.NICID, protocol tcpip.NetworkProt
 	}
 
 	return nic.AddAddressWithOptions(protocol, addr, peb)
+}
+
+// AddSubnet adds a subnet range to the specified NIC.
+func (s *Stack) AddSubnet(id tcpip.NICID, protocol tcpip.NetworkProtocolNumber, subnet tcpip.Subnet) *tcpip.Error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if nic, ok := s.nics[id]; ok {
+		nic.AddSubnet(protocol, subnet)
+		return nil
+	}
+
+	return tcpip.ErrUnknownNICID
+}
+
+// RemoveSubnet removes the subnet range from the specified NIC.
+func (s *Stack) RemoveSubnet(id tcpip.NICID, subnet tcpip.Subnet) *tcpip.Error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if nic, ok := s.nics[id]; ok {
+		nic.RemoveSubnet(subnet)
+		return nil
+	}
+
+	return tcpip.ErrUnknownNICID
+}
+
+// ContainsSubnet reports whether the specified NIC contains the specified
+// subnet.
+func (s *Stack) ContainsSubnet(id tcpip.NICID, subnet tcpip.Subnet) (bool, *tcpip.Error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if nic, ok := s.nics[id]; ok {
+		return nic.ContainsSubnet(subnet), nil
+	}
+
+	return false, tcpip.ErrUnknownNICID
+}
+
+func (s *Stack) CheckLocalAddress(nicid tcpip.NICID, protocol tcpip.NetworkProtocolNumber, addr tcpip.Address) tcpip.NICID {
+	return 0
+}
+
+func (s *Stack) AddLinkAddress(nicid tcpip.NICID, addr tcpip.Address, linkAddr tcpip.LinkAddress) {
+
+}
+
+func (s *Stack) GetLinkAddress(nicid tcpip.NICID, addr, localAddr tcpip.Address,
+	protocol tcpip.NetworkProtocolNumber, w *sleep.Waker) (tcpip.LinkAddress, <-chan struct{}, *tcpip.Error) {
+	return "", nil, nil
+}
+
+func (s *Stack) RemoveWaker(nicid tcpip.NICID, addr tcpip.Address, waker *sleep.Waker) {
+
 }
