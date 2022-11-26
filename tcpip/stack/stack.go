@@ -144,6 +144,12 @@ func (s *Stack) CreateNIC(id tcpip.NICID, linkEP tcpip.LinkEndpointID) *tcpip.Er
 	return s.createNIC(id, "", linkEP, true)
 }
 
+// CreateNamedNIC creates a NIC with the provided id and link-layer endpoint,
+// and a human-readable name.
+func (s *Stack) CreateNamedNIC(id tcpip.NICID, name string, linkEP tcpip.LinkEndpointID) *tcpip.Error {
+	return s.createNIC(id, name, linkEP, true)
+}
+
 // 新建一个网卡对象，并且激活它 激活就是准备好熊网卡中读取和写入数据
 func (s *Stack) createNIC(id tcpip.NICID, name string, linkEP tcpip.LinkEndpointID, enable bool) *tcpip.Error {
 	ep := FindLinkEndpoint(linkEP)
