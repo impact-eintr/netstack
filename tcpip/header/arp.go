@@ -65,6 +65,12 @@ func (a ARP) SetIPv4OverEthernet() {
 	a[5] = uint8(IPv4AddressSize)
 }
 
+// HardwareAddressSender从报文中得到arp发送方的硬件地址
+func (a ARP) HardwareAddressSender() []byte {
+	const s = 8
+	return a[s : s+6]
+}
+
 // ProtocolAddressSender从报文中得到arp发送方的协议地址，为ipv4地址
 func (a ARP) ProtocolAddressSender() []byte {
 	const s = 8 + 6   // 8 是arp的协议头部 6是本机MAC

@@ -49,6 +49,7 @@ func (e *Endpoint) Inject(protocol tcpip.NetworkProtocolNumber, vv buffer.Vector
 
 // InjectLinkAddr injects an inbound packet with a remote link address.
 func (e *Endpoint) InjectLinkAddr(protocol tcpip.NetworkProtocolNumber, remoteLinkAddr tcpip.LinkAddress, vv buffer.VectorisedView) {
+	// 这里的实现在NIC.go中 由 网卡对象进行数据分发
 	e.dispatcher.DeliverNetworkPacket(e, remoteLinkAddr, "" /* localLinkAddr */, protocol, vv.Clone(nil))
 }
 

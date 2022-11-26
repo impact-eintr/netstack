@@ -2,36 +2,36 @@ package fdbased
 
 import (
 	"fmt"
-	"reflect"
-	"time"
 	"math/rand"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/header"
 	"netstack/tcpip/stack"
+	"reflect"
 	"syscall"
 	"testing"
+	"time"
 )
 
 const (
-	mtu = 1500
+	mtu   = 1500
 	laddr = tcpip.LinkAddress("\x65\x66\x67\x68\x69\x70")
 	raddr = tcpip.LinkAddress("\x71\x72\x73\x74\x75\x76")
 	proto = 10
 )
 
 type packetInfo struct {
-	raddr tcpip.LinkAddress
-	proto tcpip.NetworkProtocolNumber
+	raddr    tcpip.LinkAddress
+	proto    tcpip.NetworkProtocolNumber
 	contents buffer.View
 }
 
 type context struct {
-	t *testing.T
-	fds [2]int
-	ep stack.LinkEndpoint
-	ch chan packetInfo // 信道
-	done chan struct{} // 通知退出
+	t    *testing.T
+	fds  [2]int
+	ep   stack.LinkEndpoint
+	ch   chan packetInfo // 信道
+	done chan struct{}   // 通知退出
 }
 
 func newContext(t *testing.T, opt *Options) *context {
@@ -49,10 +49,10 @@ func newContext(t *testing.T, opt *Options) *context {
 	ep := stack.FindLinkEndpoint(New(opt)).(*endpoint) // 找到端口实现
 
 	c := &context{
-		t: t,
-		fds: fds,
-		ep:ep,
-		ch: make(chan packetInfo, 100),
+		t:    t,
+		fds:  fds,
+		ep:   ep,
+		ch:   make(chan packetInfo, 100),
 		done: done,
 	}
 
@@ -79,7 +79,7 @@ func TestFdbased(t *testing.T) {
 
 	// Build header
 	hdr := buffer.NewPrependable(int(c.ep.MaxHeaderLength()) + 100) // 114
-	b := hdr.Prepend(100) // payload
+	b := hdr.Prepend(100)                                           // payload
 	for i := range b {
 		b[i] = uint8(rand.Intn(256))
 	}
@@ -91,7 +91,7 @@ func TestFdbased(t *testing.T) {
 	}
 
 	if err := c.ep.WritePacket(&stack.Route{RemoteLinkAddress: raddr}, hdr,
-		payload.ToVectoriseView(), proto); err != nil {
+		payload.ToVectorisedView(), proto); err != nil {
 		panic(err)
 	}
 

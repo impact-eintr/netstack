@@ -6,6 +6,16 @@ import (
 	"netstack/tcpip"
 	"netstack/tcpip/ports"
 	"sync"
+	"time"
+)
+
+const (
+	// ageLimit is set to the same cache stale time used in Linux.
+	ageLimit = 1 * time.Minute
+	// resolutionTimeout is set to the same ARP timeout used in Linux.
+	resolutionTimeout = 1 * time.Second
+	// resolutionAttempts is set to the same ARP retries used in Linux.
+	resolutionAttempts = 3
 )
 
 // TODO 需要解读
@@ -72,7 +82,7 @@ func New(network []string, transport []string, opts Options) *Stack {
 		networkProtocols:   make(map[tcpip.NetworkProtocolNumber]NetworkProtocol),
 		linkAddrResolvers:  make(map[tcpip.NetworkProtocolNumber]LinkAddressResolver),
 		nics:               make(map[tcpip.NICID]*NIC),
-		//linkAddrCache:      newLinkAddrCache(ageLimit, resolutionTimeout, resolutionAttempts),
+		linkAddrCache:      newLinkAddrCache(ageLimit, resolutionTimeout, resolutionAttempts),
 		//PortManager:        ports.NewPortManager(),
 		clock: clock,
 		stats: opts.Stats.FillIn(),
@@ -257,19 +267,66 @@ func (s *Stack) FindRoute(id tcpip.NICID, localAddr, remoteAddr tcpip.Address,
 	return Route{}, tcpip.ErrNoRoute
 }
 
+// ===============本机链路层缓存实现==================
+// 检查本地是否绑定过该网络层地址
 func (s *Stack) CheckLocalAddress(nicid tcpip.NICID, protocol tcpip.NetworkProtocolNumber, addr tcpip.Address) tcpip.NICID {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if nicid != 0 {
+		nic := s.nics[nicid] // 先拿到网卡
+		if nic == nil {
+			return 0
+		}
+
+		ref := nic.findEndpoint(protocol, addr, CanBePrimaryEndpoint) // 看看这张网卡是否绑定过这个地址
+		if ref == nil {
+			return 0
+		}
+
+		ref.decRef() // 这个网络端实现使用结束 释放对它的占用
+
+		return nic.id
+	}
+	// Go through all the NICs.
+	for _, nic := range s.nics {
+		ref := nic.findEndpoint(protocol, addr, CanBePrimaryEndpoint)
+		if ref != nil {
+			ref.decRef()
+			return nic.id
+		}
+	}
 	return 0
 }
 
 func (s *Stack) AddLinkAddress(nicid tcpip.NICID, addr tcpip.Address, linkAddr tcpip.LinkAddress) {
-
+	fullAddr := tcpip.FullAddress{NIC: nicid, Addr: addr}
+	s.linkAddrCache.add(fullAddr, linkAddr)
 }
 
 func (s *Stack) GetLinkAddress(nicid tcpip.NICID, addr, localAddr tcpip.Address,
 	protocol tcpip.NetworkProtocolNumber, w *sleep.Waker) (tcpip.LinkAddress, <-chan struct{}, *tcpip.Error) {
-	return "", nil, nil
+	s.mu.RLock()
+	// 获取网卡对象
+	nic := s.nics[nicid]
+	if nic == nil {
+		s.mu.RUnlock()
+		return "", nil, tcpip.ErrUnknownNICID
+	}
+	s.mu.RUnlock()
+
+	fullAddr := tcpip.FullAddress{NIC: nicid, Addr: addr}
+	// 根据网络层协议号找到对应的地址解析协议
+	linkRes := s.linkAddrResolvers[protocol]
+	return s.linkAddrCache.get(fullAddr, linkRes, localAddr, nic.linkEP, w)
 }
 
 func (s *Stack) RemoveWaker(nicid tcpip.NICID, addr tcpip.Address, waker *sleep.Waker) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
+	if nic := s.nics[nicid]; nic == nil {
+		fullAddr := tcpip.FullAddress{NIC: nicid, Addr: addr}
+		s.linkAddrCache.removeWaker(fullAddr, waker)
+	}
 }

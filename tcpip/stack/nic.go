@@ -44,7 +44,7 @@ type NIC struct {
 	demux *transportDemuxer
 
 	mu          sync.RWMutex
-	spoofing    bool
+	spoofing    bool                                        // 欺骗
 	promiscuous bool                                        // 混杂模式
 	primary     map[tcpip.NetworkProtocolNumber]*ilist.List // 网络协议号:网络端实现
 	// 网络层端的记录 IP:网络端实现
@@ -95,13 +95,13 @@ func (n *NIC) addAddressLocked(protocol tcpip.NetworkProtocolNumber, addr tcpip.
 		log.Println("添加失败")
 		return nil, tcpip.ErrUnknownProtocol
 	}
-	log.Printf("基于[%d]协议 为 #%d 网卡 添加IP: %s\n", netProto.Number(), n.id, addr.String())
 
 	// 比如netProto是ipv4 会调用ipv4.NewEndpoint 新建一个网络端
 	ep, err := netProto.NewEndpoint(n.id, addr, n.stack, n, n.linkEP)
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("基于[%d]协议 为 #%d 网卡 添加网络层实现 并绑定地址到: %s\n", netProto.Number(), n.id, ep.ID().LocalAddress)
 
 	// 获取网络层端的id 其实就是ip地址
 	id := *ep.ID()
@@ -143,7 +143,6 @@ func (n *NIC) addAddressLocked(protocol tcpip.NetworkProtocolNumber, addr tcpip.
 	case FirstPrimaryEndpoint:
 		l.PushFront(ref)
 	}
-	log.Printf("Network Info: %v \n", ref.ep.ID())
 	return ref, nil
 }
 
@@ -223,7 +222,7 @@ func (n *NIC) findEndpoint(protocol tcpip.NetworkProtocolNumber, address tcpip.A
 
 	n.mu.RLock()
 	ref := n.endpoints[id]
-	if ref != nil && !ref.tryIncRef() {
+	if ref != nil && !ref.tryIncRef() { // 尝试去使用这个网络端实现
 		ref = nil
 	}
 	spoofing := n.spoofing
@@ -309,7 +308,7 @@ func (n *NIC) getRef(protocol tcpip.NetworkProtocolNumber, dst tcpip.Address) *r
 
 	n.mu.RLock()
 	if ref, ok := n.endpoints[id]; ok && ref.tryIncRef() {
-		log.Println("找到了目标地址: ", id)
+		log.Println("找到了目标网络层实现: ", id.LocalAddress)
 		n.mu.RUnlock()
 		return ref
 	}
@@ -366,7 +365,7 @@ func (n *NIC) DeliverNetworkPacket(linkEP LinkEndpoint, remoteLinkAddr, localLin
 		return
 	}
 	src, dst := netProto.ParseAddresses(vv.First())
-	log.Printf("设备[%s]准备从 [%s] 向 [%s] 分发数据: %v\n", linkEP.LinkAddress(), src, dst, vv.ToView())
+	log.Printf("设备[%v]准备从 [%s] 向 [%s] 分发数据: %v\n", linkEP.LinkAddress(), src, dst, vv.ToView())
 	// 根据网络协议和数据包的目的地址，找到网络端
 	// 然后将数据包分发给网络层
 	if ref := n.getRef(protocol, dst); ref != nil {

@@ -1,6 +1,5 @@
 package buffer
 
-
 type View []byte
 
 func NewView(size int) View {
@@ -21,14 +20,14 @@ func (v *View) CapLength(length int) {
 	*v = (*v)[:length:length]
 }
 
-func (v View) ToVectoriseView() VectorisedView {
+func (v View) ToVectorisedView() VectorisedView {
 	return NewVectorisedView(len(v), []View{v})
 }
 
 // VectorisedView 是使用非连续内存的 View 的矢量化版本
 type VectorisedView struct {
 	views []View
-	size int
+	size  int
 }
 
 func NewVectorisedView(size int, views []View) VectorisedView {

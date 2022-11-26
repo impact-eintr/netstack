@@ -160,6 +160,14 @@ func (s *Subnet) Mask() AddressMask {
 // 它通常是一个 6 字节的 MAC 地址。
 type LinkAddress string // MAC地址
 
+func (l LinkAddress) String() string {
+	if len(l) == 6 {
+		return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", l[0], l[1], l[2], l[3], l[4], l[5])
+	} else {
+		return string(l)
+	}
+}
+
 type LinkEndpointID uint64
 
 type TransportProtocolNumber uint32
@@ -249,7 +257,8 @@ func fillIn(v reflect.Value) {
 		v := v.Field(i)
 		switch v.Kind() {
 		case reflect.Ptr:
-			if s, ok := v.Addr().Interface().(**StatCounter); ok {
+			x := v.Addr().Interface()
+			if s, ok := x.(**StatCounter); ok {
 				if *s == nil {
 					*s = &StatCounter{}
 				}
@@ -307,6 +316,6 @@ func (a Address) String() string {
 		}
 		return b.String()
 	default:
-		return fmt.Sprintf("%x", []byte(a))
+		return fmt.Sprintf("%s", string(a))
 	}
 }
