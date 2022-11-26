@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"log"
 	"netstack/sleep"
 	"netstack/tcpip"
 	"netstack/tcpip/ports"
@@ -93,6 +94,42 @@ func New(network []string, transport []string, opts Options) *Stack {
 	return s
 }
 
+func (s *Stack) Stats() tcpip.Stats {
+	return s.stats
+}
+
+// SetForwarding enables or disables the packet forwarding between NICs.
+func (s *Stack) SetForwarding(enable bool) {
+	// TODO: Expose via /proc/sys/net/ipv4/ip_forward.
+	s.mu.Lock()
+	s.forwarding = enable
+	s.mu.Unlock()
+}
+
+// Forwarding returns if the packet forwarding between NICs is enabled.
+func (s *Stack) Forwarding() bool {
+	// TODO: Expose via /proc/sys/net/ipv4/ip_forward.
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.forwarding
+}
+
+// SetRouteTable assigns the route table to be used by this stack. It
+// specifies which NIC to use for given destination address ranges.
+func (s *Stack) SetRouteTable(table []tcpip.Route) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.routeTable = table
+}
+
+// GetRouteTable returns the route table which is currently in use.
+func (s *Stack) GetRouteTable() []tcpip.Route {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]tcpip.Route(nil), s.routeTable...)
+}
+
 func (s *Stack) CreateNIC(id tcpip.NICID, linkEP tcpip.LinkEndpointID) *tcpip.Error {
 	return s.createNIC(id, "", linkEP, true)
 }
@@ -176,6 +213,48 @@ func (s *Stack) ContainsSubnet(id tcpip.NICID, subnet tcpip.Subnet) (bool, *tcpi
 	}
 
 	return false, tcpip.ErrUnknownNICID
+}
+
+// 路由查找实现，比如当tcp建立连接时，会用该函数得到路由信息
+func (s *Stack) FindRoute(id tcpip.NICID, localAddr, remoteAddr tcpip.Address,
+	netProto tcpip.NetworkProtocolNumber) (Route, *tcpip.Error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for i := range s.routeTable {
+		//if (id != 0 && id != s.routeTable[i].NIC) ||
+		//	(len(remoteAddr) != 0 && !s.routeTable[i].Match(remoteAddr)) {
+		//	continue
+		//}
+
+		nic := s.nics[s.routeTable[i].NIC]
+		if nic == nil {
+			continue
+		}
+
+		var ref *referencedNetworkEndpoint
+		if len(localAddr) != 0 {
+			ref = nic.findEndpoint(netProto, localAddr, CanBePrimaryEndpoint)
+		} else {
+			ref = nic.primaryEndpoint(netProto)
+		}
+		if ref == nil {
+			continue
+		}
+
+		if len(remoteAddr) == 0 {
+			// If no remote address was provided, then the route
+			// provided will refer to the link local address.
+			remoteAddr = ref.ep.ID().LocalAddress // 发回自己? TODO
+		}
+
+		r := makeRoute(netProto, ref.ep.ID().LocalAddress, remoteAddr, nic.linkEP.LinkAddress(), ref)
+		r.NextHop = s.routeTable[i].Gateway
+		log.Println(r.LocalLinkAddress, r.LocalAddress, r.RemoteLinkAddress, r.RemoteAddress, r.NextHop)
+		return r, nil
+	}
+
+	return Route{}, tcpip.ErrNoRoute
 }
 
 func (s *Stack) CheckLocalAddress(nicid tcpip.NICID, protocol tcpip.NetworkProtocolNumber, addr tcpip.Address) tcpip.NICID {

@@ -39,7 +39,13 @@ func (f *fakeNetworkEndpoint) MaxHeaderLength() uint16 {
 }
 func (f *fakeNetworkEndpoint) WritePacket(r *stack.Route, hdr buffer.Prependable, payload buffer.VectorisedView,
 	protocol tcpip.TransportProtocolNumber, ttl uint8) *tcpip.Error {
-	return nil
+	b := hdr.Prepend(fakeNetHeaderLen)
+	copy(b[:4], []byte(r.RemoteAddress))
+	copy(b[4:8], []byte(f.id.LocalAddress))
+	b[8] = byte(protocol)
+	log.Println("写入网络层数据 下一层去往链路层", b, payload)
+
+	return f.linkEP.WritePacket(r, hdr, payload, 114514)
 }
 
 func (f *fakeNetworkEndpoint) ID() *stack.NetworkEndpointID {
@@ -110,7 +116,7 @@ func TestStackBase(t *testing.T) {
 	if err := myStack.CreateNIC(2, id2); err != nil {          // 将上面的物理设备抽象成我们的网卡对象
 		panic(err)
 	}
-	myStack.AddAddress(1, 114514, "\x0a\xff\x01\x02") // 给网卡对象绑定一个IP地址 可以绑定多个
+	myStack.AddAddress(2, 114514, "\x0a\xff\x01\x02") // 给网卡对象绑定一个IP地址 可以绑定多个
 
 	buf := buffer.NewView(30)
 	for i := range buf {
@@ -127,5 +133,28 @@ func TestStackBase(t *testing.T) {
 	buf[6] = '\x01'
 	buf[7] = '\x01'
 
-	ep1.Inject(114514, buf.ToVectoriseView())
+	myStack.SetRouteTable([]tcpip.Route{
+		{"\x01", "\x01", "\x00", 1},
+		{"\x00", "\x01", "\x00", 2},
+	})
+
+	sendTo(t, myStack, tcpip.Address("\x0a\xff\x01\x02"))
+
+	//log.Println(ep1.Drain())
+	p := <-ep1.C
+	log.Println(p)
+}
+
+func sendTo(t *testing.T, s *stack.Stack, addr tcpip.Address) {
+	r, err := s.FindRoute(0, "", addr, 114514)
+	if err != nil {
+		t.Fatalf("FindRoute failed: %v", err)
+	}
+	defer r.Release()
+
+	hdr := buffer.NewPrependable(int(r.MaxHeaderLength()))
+	if err := r.WritePacket(hdr, buffer.VectorisedView{}, 10086, 123); err != nil {
+		t.Errorf("WritePacket failed: %v", err)
+		return
+	}
 }

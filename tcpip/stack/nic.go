@@ -45,8 +45,8 @@ type NIC struct {
 
 	mu          sync.RWMutex
 	spoofing    bool
-	promiscuous bool // 混杂模式
-	primary     map[tcpip.NetworkProtocolNumber]*ilist.List
+	promiscuous bool                                        // 混杂模式
+	primary     map[tcpip.NetworkProtocolNumber]*ilist.List // 网络协议号:网络端实现
 	// 网络层端的记录 IP:网络端实现
 	endpoints map[NetworkEndpointID]*referencedNetworkEndpoint
 	// 子网的记录
@@ -187,6 +187,33 @@ func (n *NIC) removeEndpoint(r *referencedNetworkEndpoint) {
 	n.mu.Lock()
 	n.removeEndpointLocked(r)
 	n.mu.Unlock()
+}
+
+// primaryEndpoint returns the primary endpoint of n for the given network
+// protocol.
+// 根据网络层协议号找到对应的网络层端
+func (n *NIC) primaryEndpoint(protocol tcpip.NetworkProtocolNumber) *referencedNetworkEndpoint {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+
+	list := n.primary[protocol]
+	if list == nil {
+		return nil
+	}
+
+	for e := list.Front(); e != nil; e = e.Next() {
+		r := e.(*referencedNetworkEndpoint)
+		// TODO: allow broadcast address when SO_BROADCAST is set.
+		switch r.ep.ID().LocalAddress {
+		case header.IPv4Broadcast, header.IPv4Any:
+			continue
+		}
+		if r.tryIncRef() {
+			return r
+		}
+	}
+
+	return nil
 }
 
 // 根据address参数找到对应的网络层端
@@ -348,6 +375,10 @@ func (n *NIC) DeliverNetworkPacket(linkEP LinkEndpoint, remoteLinkAddr, localLin
 		return
 	}
 	n.stack.stats.IP.InvalidAddressesReceived.Increment()
+}
+
+func (n *NIC) ID() tcpip.NICID {
+	return n.id
 }
 
 // 网络端引用

@@ -172,7 +172,7 @@ type Route struct {
 	Destination Address     // 目标地址
 	Mask        AddressMask // 掩码
 	Gateway     Address     // 网关
-	MIC         NICID       // 使用的网卡设备
+	NIC         NICID       // 使用的网卡设备
 }
 
 // Stats 包含了网络栈的统计信息

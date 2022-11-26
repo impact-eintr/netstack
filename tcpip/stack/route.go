@@ -1,6 +1,10 @@
 package stack
 
-import "netstack/tcpip"
+import (
+	"netstack/sleep"
+	"netstack/tcpip"
+	"netstack/tcpip/buffer"
+)
 
 // 贯穿整个协议栈的路由，也就是在链路层和网络层都可以路由
 // 如果目标地址是链路层地址，那么在链路层路由，
@@ -36,4 +40,74 @@ func makeRoute(netProto tcpip.NetworkProtocolNumber, localAddr, remoteAddr tcpip
 		RemoteAddress:    remoteAddr,
 		ref:              ref,
 	}
+}
+
+// NICID returns the id of the NIC from which this route originates.
+func (r *Route) NICID() tcpip.NICID {
+	return r.ref.ep.NICID()
+}
+
+// MaxHeaderLength forwards the call to the network endpoint's implementation.
+func (r *Route) MaxHeaderLength() uint16 {
+	return r.ref.ep.MaxHeaderLength()
+}
+
+// Stats returns a mutable copy of current stats.
+func (r *Route) Stats() tcpip.Stats {
+	return r.ref.nic.stack.Stats()
+}
+
+// Capabilities returns the link-layer capabilities of the route.
+func (r *Route) Capabilities() LinkEndpointCapabilities {
+	return r.ref.ep.Capabilities()
+}
+
+// RemoveWaker removes a waker that has been added in Resolve().
+func (r *Route) RemoveWaker(waker *sleep.Waker) {
+	nextAddr := r.NextHop
+	if nextAddr == "" {
+		nextAddr = r.RemoteAddress
+	}
+	r.ref.linkCache.RemoveWaker(r.ref.nic.ID(), nextAddr, waker)
+}
+
+// IsResolutionRequired returns true if Resolve() must be called to resolve
+// the link address before the this route can be written to.
+func (r *Route) IsResolutionRequired() bool {
+	return r.ref.linkCache != nil && r.RemoteLinkAddress == ""
+}
+
+// WritePacket writes the packet through the given route.
+func (r *Route) WritePacket(hdr buffer.Prependable, payload buffer.VectorisedView,
+	protocol tcpip.TransportProtocolNumber, ttl uint8) *tcpip.Error {
+	err := r.ref.ep.WritePacket(r, hdr, payload, protocol, ttl)
+	if err == tcpip.ErrNoRoute {
+		r.Stats().IP.OutgoingPacketErrors.Increment()
+	}
+	return err
+}
+
+// DefaultTTL returns the default TTL of the underlying network endpoint.
+func (r *Route) DefaultTTL() uint8 {
+	return r.ref.ep.DefaultTTL()
+}
+
+// MTU returns the MTU of the underlying network endpoint.
+func (r *Route) MTU() uint32 {
+	return r.ref.ep.MTU()
+}
+
+// Release frees all resources associated with the route.
+func (r *Route) Release() {
+	if r.ref != nil {
+		r.ref.decRef()
+		r.ref = nil
+	}
+}
+
+// Clone Clone a route such that the original one can be released and the new
+// one will remain valid.
+func (r *Route) Clone() Route {
+	r.ref.incRef()
+	return *r
 }
