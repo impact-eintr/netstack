@@ -238,10 +238,10 @@ func (s *Stack) FindRoute(id tcpip.NICID, localAddr, remoteAddr tcpip.Address,
 	defer s.mu.RUnlock()
 
 	for i := range s.routeTable {
-		//if (id != 0 && id != s.routeTable[i].NIC) ||
-		//	(len(remoteAddr) != 0 && !s.routeTable[i].Match(remoteAddr)) {
-		//	continue
-		//}
+		if (id != 0 && id != s.routeTable[i].NIC) ||
+			(len(remoteAddr) != 0 && !s.routeTable[i].Match(remoteAddr)) {
+			continue
+		}
 
 		nic := s.nics[s.routeTable[i].NIC]
 		if nic == nil {

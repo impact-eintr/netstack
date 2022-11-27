@@ -183,6 +183,21 @@ type Route struct {
 	NIC         NICID       // 使用的网卡设备
 }
 
+// Match determines if r is viable for the given destination address.
+func (r *Route) Match(addr Address) bool {
+	if len(addr) != len(r.Destination) {
+		return false
+	}
+
+	for i := 0; i < len(r.Destination); i++ {
+		if (addr[i] & r.Mask[i]) != r.Destination[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
 // Stats 包含了网络栈的统计信息
 type Stats struct {
 	// TODO 需要解读

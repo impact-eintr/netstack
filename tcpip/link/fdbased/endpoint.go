@@ -1,6 +1,7 @@
 package fdbased
 
 import (
+	"log"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/header"
@@ -126,6 +127,7 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable,
 		ethHdr.SrcAddr = e.addr // 说明这是一个原始报文
 	}
 	eth.Encode(ethHdr) // 将以太帧信息作为报文头编入
+	log.Println("链路层写回报文")
 	// 写入网卡中
 	if payload.Size() == 0 {
 		return rawfile.NonBlockingWrite(e.fd, hdr.View())

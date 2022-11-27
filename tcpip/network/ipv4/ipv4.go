@@ -1,6 +1,7 @@
 package ipv4
 
 import (
+	"log"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/header"
@@ -30,7 +31,12 @@ type endpoint struct {
 	id stack.NetworkEndpointID
 	// 链路端的表示
 	linkEP stack.LinkEndpoint
-	// TODO 需要添加
+	// 报文分发器
+	dispatcher stack.TransportDispatcher
+	// ping请求报文接收队列
+	echoRequests chan echoRequest
+	// ip报文分片处理器
+	//fragmentation *fragmentation.Fragmentation
 }
 
 // DefaultTTL is the default time-to-live value for this endpoint.
@@ -73,13 +79,82 @@ func (e *endpoint) MaxHeaderLength() uint16 {
 // 将传输层的数据封装加上IP头，并调用网卡的写入接口，写入IP报文
 func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable, payload buffer.VectorisedView,
 	protocol tcpip.TransportProtocolNumber, ttl uint8) *tcpip.Error {
-	return nil
+	// 预留ip报文的空间
+	ip := header.IPv4(hdr.Prepend(header.IPv4MinimumSize))
+	length := uint16(hdr.UsedLength() + payload.Size())
+	id := uint32(0)
+	// 如果报文长度大于68
+	if length > header.IPv4MaximumHeaderSize+8 {
+		// Packets of 68 bytes or less are required by RFC 791 to not be
+		// fragmented, so we only assign ids to larger packets.
+		//id = atomic.AddUint32(&ids[hashRoute(r, protocol)%buckets], 1)
+	}
+	// ip首部编码
+	ip.Encode(&header.IPv4Fields{
+		IHL:         header.IPv4MinimumSize,
+		TotalLength: length,
+		ID:          uint16(id),
+		TTL:         ttl,
+		Protocol:    uint8(protocol),
+		SrcAddr:     r.LocalAddress,
+		DstAddr:     r.RemoteAddress,
+	})
+	// 计算校验和和设置校验和
+	ip.SetChecksum(^ip.CalculateChecksum())
+	r.Stats().IP.PacketsSent.Increment()
+
+	// 写入网卡接口
+	if protocol == header.ICMPv4ProtocolNumber {
+		log.Printf("IP 写回ICMP报文 长度: %d\n", hdr.UsedLength()+payload.Size())
+	} else {
+		log.Printf("send ipv4 packet %d bytes, proto: 0x%x", hdr.UsedLength()+payload.Size(), protocol)
+	}
+	return e.linkEP.WritePacket(r, hdr, payload, ProtocolNumber)
 }
 
 // HandlePacket is called by the link layer when new ipv4 packets arrive for
 // this endpoint.
 // 收到ip包的处理
 func (e *endpoint) HandlePacket(r *stack.Route, vv buffer.VectorisedView) {
+	// 得到ip报文
+	h := header.IPv4(vv.First())
+	// 检查报文是否有效
+	if !h.IsValid(vv.Size()) {
+		return
+	}
+	log.Println(h)
+
+	hlen := int(h.HeaderLength())
+	tlen := int(h.TotalLength())
+	vv.TrimFront(hlen)
+	vv.CapLength(tlen - hlen)
+
+	// 报文重组 TODO
+	more := (h.Flags() & header.IPv4FlagMoreFragments) != 0
+	// 是否需要ip重组
+	if more || h.FragmentOffset() != 0 {
+		// The packet is a fragment, let's try to reassemble it.
+		last := h.FragmentOffset() + uint16(vv.Size()) - 1
+		var ready bool
+		log.Println(last)
+		// ip分片重组
+		//vv, ready = e.fragmentation.Process(hash.IPv4FragmentHash(h), h.FragmentOffset(), last, more, vv)
+		if !ready {
+			return
+		}
+	}
+
+	// 得到传输层的协议
+	p := h.TransportProtocol()
+	// 如果时ICMP协议，则进入ICMP处理函数
+	if p == header.ICMPv4ProtocolNumber {
+		e.handleICMP(r, vv)
+		return
+	}
+	r.Stats().IP.PacketsDelivered.Increment()
+	// 根据协议分发到不同处理函数，比如协议时TCP，会进入tcp.HandlePacket
+	log.Printf("recv ipv4 packet %d bytes, proto: 0x%x", tlen, p)
+	e.dispatcher.DeliverTransportPacket(r, p, vv)
 }
 
 // Close cleans up resources associated with the endpoint.
@@ -94,10 +169,14 @@ type protocol struct{}
 func (p *protocol) NewEndpoint(nicid tcpip.NICID, addr tcpip.Address, linkAddrCache stack.LinkAddressCache,
 	dispatcher stack.TransportDispatcher, linkEP stack.LinkEndpoint) (stack.NetworkEndpoint, *tcpip.Error) {
 	e := &endpoint{
-		nicid:  nicid,
-		id:     stack.NetworkEndpointID{LocalAddress: addr},
-		linkEP: linkEP,
+		nicid:        nicid,
+		id:           stack.NetworkEndpointID{LocalAddress: addr},
+		linkEP:       linkEP,
+		dispatcher:   dispatcher,
+		echoRequests: make(chan echoRequest, 10),
 	}
+
+	go e.echoReplier()
 
 	return e, nil
 }
@@ -122,9 +201,8 @@ func (p *protocol) MinimumPacketSize() int {
 
 // ParseAddresses implements NetworkProtocol.ParseAddresses.
 func (*protocol) ParseAddresses(v buffer.View) (src, dst tcpip.Address) {
-	//h := header.IPv4(v)
-	//return h.SourceAddress(), h.DestinationAddress()
-	return "", ""
+	h := header.IPv4(v)
+	return h.SourceAddress(), h.DestinationAddress()
 }
 
 // SetOption implements NetworkProtocol.SetOption.

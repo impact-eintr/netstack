@@ -2,6 +2,7 @@ package header
 
 import (
 	"encoding/binary"
+	"fmt"
 	"netstack/tcpip"
 )
 
@@ -104,6 +105,12 @@ const (
 
 	// IPv4Any is the non-routable IPv4 "any" meta address.
 	IPv4Any tcpip.Address = "\x00\x00\x00\x00"
+)
+
+// Flags that may be set in an IPv4 packet.
+const (
+	IPv4FlagMoreFragments = 1 << iota
+	IPv4FlagDontFragment
 )
 
 func IPVersion(b []byte) int {
@@ -216,6 +223,11 @@ func (b IPv4) SetDestinationAddress(addr tcpip.Address) {
 	copy(b[dstAddr:dstAddr+IPv4AddressSize], addr)
 }
 
+// CalculateChecksum calculates the checksum of the ipv4 header.
+func (b IPv4) CalculateChecksum() uint16 {
+	return Checksum(b[:b.HeaderLength()], 0)
+}
+
 // Encode encodes all the fields of the ipv4 header.
 func (b IPv4) Encode(i *IPv4Fields) {
 	b[versIHL] = (4 << 4) | ((i.IHL / 4) & 0xf)
@@ -263,4 +275,29 @@ func IsV4MulticastAddress(addr tcpip.Address) bool {
 		return false
 	}
 	return (addr[0] & 0xf0) == 0xe0
+}
+
+var ipv4Fmt string = `
+|% 4s|% 4s|% 8s| % 16s|
+|  % 16s|%s|%s|%s|% 11s|
+| % 8s|% 8s|% 16s |
+|% 32s    |
+|% 32s    |
+|        Options       |   Padding   |
+%v
+`
+
+type Types [] struct {}
+
+func atoi[T int | int8 | int16 | int32 | int64 | uint | uint8 |uint16 | uint32](i T) string {
+	return fmt.Sprintf("%d", i)
+}
+
+func (b IPv4) String() string {
+	return fmt.Sprintf(ipv4Fmt, atoi(IPVersion(b)), atoi(b.HeaderLength()), atoi(0), atoi(b.TotalLength()),
+		atoi(b.ID()), atoi(b.Flags()>>2), atoi((b.Flags()&2)>>1), atoi(b.Flags()&1), atoi(b.FragmentOffset()),
+		atoi(b.TTL()), atoi(b.Protocol()), atoi(b.Checksum()),
+		b.SourceAddress().String(),
+		b.DestinationAddress().String(),
+		b.Payload())
 }
