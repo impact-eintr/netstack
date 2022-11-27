@@ -382,6 +382,7 @@ func (n *NIC) DeliverNetworkPacket(linkEP LinkEndpoint, remoteLinkAddr, localLin
 // DeliverTransportPacket delivers packets to the appropriate
 // transport protocol endpoint.
 func (n *NIC) DeliverTransportPacket(r *Route, protocol tcpip.TransportProtocolNumber, vv buffer.VectorisedView) {
+	log.Println("准备分发传输层数据报")
 
 }
 

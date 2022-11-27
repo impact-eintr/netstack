@@ -5,7 +5,10 @@ import (
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/header"
+	"netstack/tcpip/network/fragmentation"
+	"netstack/tcpip/network/hash"
 	"netstack/tcpip/stack"
+	"sync/atomic"
 )
 
 const (
@@ -36,7 +39,7 @@ type endpoint struct {
 	// ping请求报文接收队列
 	echoRequests chan echoRequest
 	// ip报文分片处理器
-	//fragmentation *fragmentation.Fragmentation
+	fragmentation *fragmentation.Fragmentation
 }
 
 // DefaultTTL is the default time-to-live value for this endpoint.
@@ -87,7 +90,7 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable, payload b
 	if length > header.IPv4MaximumHeaderSize+8 {
 		// Packets of 68 bytes or less are required by RFC 791 to not be
 		// fragmented, so we only assign ids to larger packets.
-		//id = atomic.AddUint32(&ids[hashRoute(r, protocol)%buckets], 1)
+		id = atomic.AddUint32(&ids[hashRoute(r, protocol)%buckets], 1)
 	}
 	// ip首部编码
 	ip.Encode(&header.IPv4Fields{
@@ -118,6 +121,7 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable, payload b
 func (e *endpoint) HandlePacket(r *stack.Route, vv buffer.VectorisedView) {
 	// 得到ip报文
 	h := header.IPv4(vv.First())
+	log.Println(h)
 	// 检查报文是否有效
 	if !h.IsValid(vv.Size()) {
 		return
@@ -136,9 +140,8 @@ func (e *endpoint) HandlePacket(r *stack.Route, vv buffer.VectorisedView) {
 		// The packet is a fragment, let's try to reassemble it.
 		last := h.FragmentOffset() + uint16(vv.Size()) - 1
 		var ready bool
-		log.Println(last)
 		// ip分片重组
-		//vv, ready = e.fragmentation.Process(hash.IPv4FragmentHash(h), h.FragmentOffset(), last, more, vv)
+		vv, ready = e.fragmentation.Process(hash.IPv4FragmentHash(h), h.FragmentOffset(), last, more, vv)
 		if !ready {
 			return
 		}
@@ -159,6 +162,7 @@ func (e *endpoint) HandlePacket(r *stack.Route, vv buffer.VectorisedView) {
 
 // Close cleans up resources associated with the endpoint.
 func (e *endpoint) Close() {
+	close(e.echoRequests)
 }
 
 // 实现NetworkProtocol接口
@@ -174,6 +178,8 @@ func (p *protocol) NewEndpoint(nicid tcpip.NICID, addr tcpip.Address, linkAddrCa
 		linkEP:       linkEP,
 		dispatcher:   dispatcher,
 		echoRequests: make(chan echoRequest, 10),
+		fragmentation: fragmentation.NewFragmentation(fragmentation.HighFragThreshold,
+			fragmentation.LowFragThreshold, fragmentation.DefaultReassembleTimeout),
 	}
 
 	go e.echoReplier()
@@ -224,7 +230,29 @@ func calculateMTU(mtu uint32) uint32 {
 	return mtu - header.IPv4MinimumSize
 }
 
+// 用 源地址 目标地址 和 传输层协议号 进行一个哈希
+func hashRoute(r *stack.Route, protocol tcpip.TransportProtocolNumber) uint32 {
+	t := r.LocalAddress
+	a := uint32(t[0]) | uint32(t[1])<<8 | uint32(t[2])<<16 | uint32(t[3])<<24
+	t = r.RemoteAddress
+	b := uint32(t[0]) | uint32(t[1])<<8 | uint32(t[2])<<16 | uint32(t[3])<<24
+	return hash.Hash3Words(a, b, uint32(protocol), hashIV)
+}
+
+var (
+	ids    []uint32
+	hashIV uint32
+)
+
 func init() {
+	ids = make([]uint32, buckets)
+
+	r := hash.RandN32(1 + buckets)
+	for i := range ids {
+		ids[i] = r[i] // 初始化ids
+	}
+	hashIV = r[buckets]
+
 	stack.RegisterNetworkProtocolFactory(ProtocolName, func() stack.NetworkProtocol {
 		return &protocol{}
 	})
