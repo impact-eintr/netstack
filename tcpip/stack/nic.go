@@ -379,6 +379,19 @@ func (n *NIC) DeliverNetworkPacket(linkEP LinkEndpoint, remoteLinkAddr, localLin
 	n.stack.stats.IP.InvalidAddressesReceived.Increment()
 }
 
+// DeliverTransportPacket delivers packets to the appropriate
+// transport protocol endpoint.
+func (n *NIC) DeliverTransportPacket(r *Route, protocol tcpip.TransportProtocolNumber, vv buffer.VectorisedView) {
+
+}
+
+// DeliverTransportControlPacket delivers control packets to the
+// appropriate transport protocol endpoint.
+func (n *NIC) DeliverTransportControlPacket(local, remote tcpip.Address, net tcpip.NetworkProtocolNumber,
+	trans tcpip.TransportProtocolNumber, typ ControlType, extra uint32, vv buffer.VectorisedView) {
+
+}
+
 func (n *NIC) ID() tcpip.NICID {
 	return n.id
 }

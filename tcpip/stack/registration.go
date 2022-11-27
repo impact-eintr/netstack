@@ -185,18 +185,32 @@ type TransportEndpointID struct {
 // ControlType 是网络层控制消息的类型
 type ControlType int
 
+const (
+	ControlPacketTooBig ControlType = iota
+	ControlPortUnreachable
+	ControlUnknown
+)
+
 // TODO 需要解读
 type TransportEndpoint interface {
 	HandlePacket(r *Route, id TransportEndpointID, vv buffer.VectorisedView)
 	HandleControlPacker(id TransportEndpointID, typ ControlType, extra uint32, vv buffer.VectorisedView)
 }
 
-// TODO 需要解读
+// 传输层协议 TCP OR UDP
 type TransportProtocol interface {
 }
 
-// TODO 需要解读
+// 传输层调度器
 type TransportDispatcher interface {
+	// DeliverTransportPacket delivers packets to the appropriate
+	// transport protocol endpoint.
+	DeliverTransportPacket(r *Route, protocol tcpip.TransportProtocolNumber, vv buffer.VectorisedView)
+
+	// DeliverTransportControlPacket delivers control packets to the
+	// appropriate transport protocol endpoint.
+	DeliverTransportControlPacket(local, remote tcpip.Address, net tcpip.NetworkProtocolNumber,
+		trans tcpip.TransportProtocolNumber, typ ControlType, extra uint32, vv buffer.VectorisedView)
 }
 
 // 注册一个新的网络协议工厂
