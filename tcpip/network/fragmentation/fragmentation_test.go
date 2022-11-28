@@ -162,8 +162,10 @@ func TestFragmentationBase(t *testing.T) {
 	ip.SetChecksum(^ip.CalculateChecksum())
 	copy(v, ip)
 	copy(v[header.IPv4MinimumSize:], payload.First())
-	log.Println(ip.FragmentOffset())
 
 	inject(stackAddr1)
+
+	msg := <-c.linkEP.C
+	log.Println(msg.Header)
 
 }

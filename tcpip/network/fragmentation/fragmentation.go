@@ -67,11 +67,25 @@ func (f *Fragmentation) Process(id uint32, first, last uint16, more bool, vv buf
 	}
 	f.mu.Unlock()
 
-	//res, done, consumed := r.process(first, last, more, vv)
-	log.Printf("[%d]的分片 [%d,%d) 合并中\n", id, first, last)
-	r.process(first, last, more, vv)
+	res, done, consumed := r.process(first, last, more, vv)
 
-	return buffer.VectorisedView{}, false
+	f.mu.Lock()
+	f.size += consumed
+	log.Printf("[%d]的分片 [%d,%d] 合并中\n", id, first, last)
+	if done {
+		f.release(r)
+	}
+	// Evict reassemblers if we are consuming more memory than highLimit until
+	// we reach lowLimit.
+	if f.size > f.highLimit {
+		tail := f.rList.Back()
+		for f.size > f.lowLimit && tail != nil {
+			f.release(tail)
+			tail = tail.Prev()
+		}
+	}
+	f.mu.Unlock()
+	return res, done
 }
 
 func (f *Fragmentation) release(r *reassembler) {

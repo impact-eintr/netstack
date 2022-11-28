@@ -36,7 +36,7 @@ type reassembler struct {
 	id           uint32
 	size         int
 	mu           sync.Mutex
-	holes        []hole
+	holes        []hole // 每个临时ip报文的缓冲区 最大是65535
 	deleted      int
 	heap         fragHeap // 小根堆用来自动排序
 	done         bool
@@ -68,7 +68,7 @@ func (r *reassembler) updateHoles(first, last uint16, more bool) bool {
 		}
 		used = true
 		r.deleted++
-		r.holes[i].deleted = true
+		r.holes[i].deleted = true // 当前位置被占用
 		if first > r.holes[i].first {
 			r.holes = append(r.holes, hole{r.holes[i].first, first - 1, false})
 		}

@@ -388,6 +388,8 @@ func (n *NIC) DeliverNetworkPacket(linkEP LinkEndpoint, remoteLinkAddr, localLin
 // transport protocol endpoint.
 func (n *NIC) DeliverTransportPacket(r *Route, protocol tcpip.TransportProtocolNumber, vv buffer.VectorisedView) {
 	log.Println("准备分发传输层数据报")
+	hdr := buffer.NewPrependable(header.EthernetMinimumSize + header.IPv4MinimumSize)
+	r.ref.ep.WritePacket(r, hdr, vv, protocol, 255)
 
 }
 
