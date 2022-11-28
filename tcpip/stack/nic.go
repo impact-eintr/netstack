@@ -344,7 +344,7 @@ func (n *NIC) getRef(protocol tcpip.NetworkProtocolNumber, dst tcpip.Address) *r
 	return nil
 }
 
-// 当 NIC 从物理接口接收数据包时，将调用函数 DeliverNetworkPacket，用来分发网络层数据包。
+// DeliverNetworkPacket 当 NIC 从物理接口接收数据包时，将调用函数 DeliverNetworkPacket，用来分发网络层数据包。
 // 比如 protocol 是 arp 协议号，那么会找到arp.HandlePacket来处理数据报。
 // 简单来说就是根据网络层协议和目的地址来找到相应的网络层端，将网络层数据发给它，
 // 当前实现的网络层协议有 arp、ipv4 和 ipv6。
@@ -387,9 +387,13 @@ func (n *NIC) DeliverNetworkPacket(linkEP LinkEndpoint, remoteLinkAddr, localLin
 // DeliverTransportPacket delivers packets to the appropriate
 // transport protocol endpoint.
 func (n *NIC) DeliverTransportPacket(r *Route, protocol tcpip.TransportProtocolNumber, vv buffer.VectorisedView) {
-	log.Println("准备分发传输层数据报")
-	hdr := buffer.NewPrependable(header.EthernetMinimumSize + header.IPv4MinimumSize)
-	r.ref.ep.WritePacket(r, hdr, vv, protocol, 255)
+	// 先查找协议栈是否注册了该传输层协议
+	_, ok := n.stack.transportProtocols[protocol]
+	if !ok {
+		n.stack.stats.UnknownProtocolRcvdPackets.Increment()
+		return
+	}
+	log.Println("准备分发传输层数据报", n.stack.transportProtocols)
 
 }
 

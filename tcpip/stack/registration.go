@@ -4,6 +4,7 @@ import (
 	"netstack/sleep"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
+	"netstack/waiter"
 	"sync"
 )
 
@@ -88,14 +89,16 @@ type NetworkDispatcher interface {
 
 type LinkEndpointCapabilities uint
 
-// type TransportProtocolFactory func() TransportProtocol TODO
+// TransportProtocolFactory 传输层实现工厂
+type TransportProtocolFactory func() TransportProtocol
 
+// NetworkProtocolFactory 网络层实现工厂
 type NetworkProtocolFactory func() NetworkProtocol
 
 var (
 	// 以下两个map需要在init函数中注册
-	// 传输层协议的注册存储结构 TODO
-	//transportProtocols = make(map[string]TransportProtocolFactory)
+	// 传输层协议的注册存储结构
+	transportProtocols = make(map[string]TransportProtocolFactory)
 	// 网络层协议的注册存储结构
 	networkProtocols = make(map[string]NetworkProtocolFactory)
 
@@ -191,17 +194,49 @@ const (
 	ControlUnknown
 )
 
-// TODO 需要解读
+// TransportEndpoint 传输层实现接口
 type TransportEndpoint interface {
 	HandlePacket(r *Route, id TransportEndpointID, vv buffer.VectorisedView)
 	HandleControlPacker(id TransportEndpointID, typ ControlType, extra uint32, vv buffer.VectorisedView)
 }
 
-// 传输层协议 TCP OR UDP
+// TransportProtocol 传输层协议 TCP OR UDP
 type TransportProtocol interface {
+	// Number returns the transport protocol number.
+	Number() tcpip.TransportProtocolNumber
+
+	// NewEndpoint creates a new endpoint of the transport protocol.
+	NewEndpoint(stack *Stack, netProto tcpip.NetworkProtocolNumber, waitQueue *waiter.Queue) (tcpip.Endpoint, *tcpip.Error)
+
+	// MinimumPacketSize returns the minimum valid packet size of this
+	// transport protocol. The stack automatically drops any packets smaller
+	// than this targeted at this protocol.
+	MinimumPacketSize() int
+
+	// ParsePorts returns the source and destination ports stored in a
+	// packet of this protocol.
+	ParsePorts(v buffer.View) (src, dst uint16, err *tcpip.Error)
+
+	// HandleUnknownDestinationPacket handles packets targeted at this
+	// protocol but that don't match any existing endpoint. For example,
+	// it is targeted at a port that have no listeners.
+	//
+	// The return value indicates whether the packet was well-formed (for
+	// stats purposes only).
+	HandleUnknownDestinationPacket(r *Route, id TransportEndpointID, vv buffer.VectorisedView) bool
+
+	// SetOption allows enabling/disabling protocol specific features.
+	// SetOption returns an error if the option is not supported or the
+	// provided option value is invalid.
+	SetOption(option interface{}) *tcpip.Error
+
+	// Option allows retrieving protocol specific option values.
+	// Option returns an error if the option is not supported or the
+	// provided option value is invalid.
+	Option(option interface{}) *tcpip.Error
 }
 
-// 传输层调度器
+// TransportDispatcher 传输层调度器
 type TransportDispatcher interface {
 	// DeliverTransportPacket delivers packets to the appropriate
 	// transport protocol endpoint.
@@ -213,12 +248,17 @@ type TransportDispatcher interface {
 		trans tcpip.TransportProtocolNumber, typ ControlType, extra uint32, vv buffer.VectorisedView)
 }
 
-// 注册一个新的网络协议工厂
+// RegisterTransportProtocolFactory 注册一个新的传输层协议工厂
+func RegisterTransportProtocolFactory(name string, p TransportProtocolFactory) {
+	transportProtocols[name] = p
+}
+
+// RegisterNetworkProtocolFactory 注册一个新的网络协议工厂
 func RegisterNetworkProtocolFactory(name string, p NetworkProtocolFactory) {
 	networkProtocols[name] = p
 }
 
-// 注册一个链路层设备
+// RegisterLinkEndpoint 注册一个链路层设备
 func RegisterLinkEndpoint(linkEP LinkEndpoint) tcpip.LinkEndpointID {
 	linkEPMu.Lock()
 	defer linkEPMu.Unlock()

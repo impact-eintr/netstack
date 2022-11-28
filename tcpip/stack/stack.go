@@ -4,7 +4,9 @@ import (
 	"log"
 	"netstack/sleep"
 	"netstack/tcpip"
+	"netstack/tcpip/buffer"
 	"netstack/tcpip/ports"
+	"netstack/waiter"
 	"sync"
 	"time"
 )
@@ -26,14 +28,17 @@ type TcpEndpointState struct {
 	// TODO 需要添加
 }
 
+// 传输层协议状态机 包含传输层协议以及默认处理方法
 type transportProtocolState struct {
+	proto          TransportProtocol
+	defaultHandler func(*Route, TransportEndpointID, buffer.VectorisedView) bool
 }
 
 // Stack 是一个网络堆栈，具有所有支持的协议、NIC 和路由表。
 type Stack struct {
 	transportProtocols map[tcpip.TransportProtocolNumber]*transportProtocolState // 各种传输层协议
 	networkProtocols   map[tcpip.NetworkProtocolNumber]NetworkProtocol           // 各种网络层协议
-	linkAddrResolvers  map[tcpip.NetworkProtocolNumber]LinkAddressResolver       // 各种传输层协议
+	linkAddrResolvers  map[tcpip.NetworkProtocolNumber]LinkAddressResolver       // 各种链接解析器
 
 	demux *transportDemuxer // 传输层的复用器
 
@@ -83,9 +88,9 @@ func New(network []string, transport []string, opts Options) *Stack {
 		linkAddrResolvers:  make(map[tcpip.NetworkProtocolNumber]LinkAddressResolver),
 		nics:               make(map[tcpip.NICID]*NIC),
 		linkAddrCache:      newLinkAddrCache(ageLimit, resolutionTimeout, resolutionAttempts),
-		//PortManager:        ports.NewPortManager(),
-		clock: clock,
-		stats: opts.Stats.FillIn(),
+		PortManager:        ports.NewPortManager(),
+		clock:              clock,
+		stats:              opts.Stats.FillIn(),
 	}
 
 	// 添加指定的网络端协议 必须已经在init中注册过
@@ -100,7 +105,17 @@ func New(network []string, transport []string, opts Options) *Stack {
 	}
 
 	// 添加指定的传输层协议 必已经在init中注册过
-	// TODO
+	for _, name := range transport {
+		transProtoFactory, ok := transportProtocols[name]
+		if !ok {
+			continue
+		}
+		transProto := transProtoFactory() // 新建一个传输层协议
+		s.transportProtocols[transProto.Number()] = &transportProtocolState{
+			proto: transProto,
+		}
+	}
+	// TODO 添加传输层分流器
 	return s
 }
 
@@ -140,6 +155,17 @@ func (s *Stack) GetRouteTable() []tcpip.Route {
 	return append([]tcpip.Route(nil), s.routeTable...)
 }
 
+// NewEndpoint 根据给定的网络层协议号和传输层协议号新建一个传输层实现
+func (s *Stack) NewEndpoint(transport tcpip.TransportProtocolNumber,
+	network tcpip.NetworkProtocolNumber, waiterQueue *waiter.Queue) (tcpip.Endpoint, *tcpip.Error) {
+	t, ok := s.transportProtocols[transport]
+	if !ok {
+		return nil, tcpip.ErrUnknownProtocol
+	}
+	return t.proto.NewEndpoint(s, network, waiterQueue)
+}
+
+// CreateNIC 根据给定的网卡号 和 链路层设备号 创建一个网卡对象
 func (s *Stack) CreateNIC(id tcpip.NICID, linkEP tcpip.LinkEndpointID) *tcpip.Error {
 	return s.createNIC(id, "", linkEP, true)
 }

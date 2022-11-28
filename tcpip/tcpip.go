@@ -3,6 +3,8 @@ package tcpip
 import (
 	"errors"
 	"fmt"
+	"netstack/tcpip/buffer"
+	"netstack/waiter"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -75,13 +77,6 @@ type Clock interface {
 type Address string
 
 type AddressMask string
-
-// 传输层的完整地址
-type FullAddress struct {
-	NIC  NICID   // NICID
-	Addr Address // IP Address
-	Port uint16  // transport Port
-}
 
 func (a AddressMask) String() string {
 	return Address(a).String()
@@ -176,6 +171,178 @@ type NetworkProtocolNumber uint32
 
 type NICID int32
 
+// ShutdownFlags represents flags that can be passed to the Shutdown() method
+// of the Endpoint interface.
+type ShutdownFlags int
+
+// Values of the flags that can be passed to the Shutdown() method. They can
+// be OR'ed together.
+const (
+	ShutdownRead ShutdownFlags = 1 << iota
+	ShutdownWrite
+)
+
+// FullAddress 传输层的完整地址
+type FullAddress struct {
+	NIC  NICID   // NICID
+	Addr Address // IP Address
+	Port uint16  // transport Port
+}
+
+func (fa FullAddress) String() string {
+	return fmt.Sprintf("%d:%s:%d", fa.NIC, fa.Addr, fa.Port)
+}
+
+// Payload provides an interface around data that is being sent to an endpoint.
+// This allows the endpoint to request the amount of data it needs based on
+// internal buffers without exposing them. 'p.Get(p.Size())' reads all the data.
+type Payload interface {
+	// Get returns a slice containing exactly 'min(size, p.Size())' bytes.
+	Get(size int) ([]byte, *Error)
+
+	// Size returns the payload size.
+	Size() int
+}
+
+// SlicePayload 实现了 Payload
+type SlicePayload []byte
+
+// Get implements Payload.
+func (s SlicePayload) Get(size int) ([]byte, *Error) {
+	if size > s.Size() {
+		size = s.Size()
+	}
+	return s[:size], nil
+}
+
+// Size implements Payload.
+func (s SlicePayload) Size() int {
+	return len(s)
+}
+
+// A ControlMessages contains socket control messages for IP sockets.
+//
+// +stateify savable
+type ControlMessages struct {
+	// HasTimestamp indicates whether Timestamp is valid/set.
+	HasTimestamp bool
+
+	// Timestamp is the time (in ns) that the last packed used to create
+	// the read data was received.
+	Timestamp int64
+}
+
+// Endpoint is the interface implemented by transport protocols (e.g., tcp, udp)
+// that exposes functionality like read, write, connect, etc. to users of the
+// networking stack.
+// 传输层接口
+type Endpoint interface {
+	// Close puts the endpoint in a closed state and frees all resources
+	// associated with it.
+	Close()
+
+	// Read reads data from the endpoint and optionally returns the sender.
+	//
+	// This method does not block if there is no data pending. It will also
+	// either return an error or data, never both.
+	//
+	// A timestamp (in ns) is optionally returned. A zero value indicates
+	// that no timestamp was available.
+	Read(*FullAddress) (buffer.View, ControlMessages, *Error)
+
+	// Write writes data to the endpoint's peer. This method does not block if
+	// the data cannot be written.
+	//
+	// Unlike io.Writer.Write, Endpoint.Write transfers ownership of any bytes
+	// successfully written to the Endpoint. That is, if a call to
+	// Write(SlicePayload{data}) returns (n, err), it may retain data[:n], and
+	// the caller should not use data[:n] after Write returns.
+	//
+	// Note that unlike io.Writer.Write, it is not an error for Write to
+	// perform a partial write.
+	//
+	// For UDP and Ping sockets if address resolution is required,
+	// ErrNoLinkAddress and a notification channel is returned for the caller to
+	// block. Channel is closed once address resolution is complete (success or
+	// not). The channel is only non-nil in this case.
+	Write(Payload, WriteOptions) (uintptr, <-chan struct{}, *Error)
+
+	// Peek reads data without consuming it from the endpoint.
+	//
+	// This method does not block if there is no data pending.
+	//
+	// A timestamp (in ns) is optionally returned. A zero value indicates
+	// that no timestamp was available.
+	Peek([][]byte) (uintptr, ControlMessages, *Error)
+
+	// Connect connects the endpoint to its peer. Specifying a NIC is
+	// optional.
+	//
+	// There are three classes of return values:
+	//	nil -- the attempt to connect succeeded.
+	//	ErrConnectStarted/ErrAlreadyConnecting -- the connect attempt started
+	//		but hasn't completed yet. In this case, the caller must call Connect
+	//		or GetSockOpt(ErrorOption) when the endpoint becomes writable to
+	//		get the actual result. The first call to Connect after the socket has
+	//		connected returns nil. Calling connect again results in ErrAlreadyConnected.
+	//	Anything else -- the attempt to connect failed.
+	Connect(address FullAddress) *Error
+
+	// Shutdown closes the read and/or write end of the endpoint connection
+	// to its peer.
+	Shutdown(flags ShutdownFlags) *Error
+
+	// Listen puts the endpoint in "listen" mode, which allows it to accept
+	// new connections.
+	Listen(backlog int) *Error
+
+	// Accept returns a new endpoint if a peer has established a connection
+	// to an endpoint previously set to listen mode. This method does not
+	// block if no new connections are available.
+	//
+	// The returned Queue is the wait queue for the newly created endpoint.
+	Accept() (Endpoint, *waiter.Queue, *Error)
+
+	// Bind binds the endpoint to a specific local address and port.
+	// Specifying a NIC is optional.
+	//
+	// An optional commit function will be executed atomically with respect
+	// to binding the endpoint. If this returns an error, the bind will not
+	// occur and the error will be propagated back to the caller.
+	Bind(address FullAddress, commit func() *Error) *Error
+
+	// GetLocalAddress returns the address to which the endpoint is bound.
+	GetLocalAddress() (FullAddress, *Error)
+
+	// GetRemoteAddress returns the address to which the endpoint is
+	// connected.
+	GetRemoteAddress() (FullAddress, *Error)
+
+	// Readiness returns the current readiness of the endpoint. For example,
+	// if waiter.EventIn is set, the endpoint is immediately readable.
+	Readiness(mask waiter.EventMask) waiter.EventMask
+
+	// SetSockOpt sets a socket option. opt should be one of the *Option types.
+	SetSockOpt(opt interface{}) *Error
+
+	// GetSockOpt gets a socket option. opt should be a pointer to one of the
+	// *Option types.
+	GetSockOpt(opt interface{}) *Error
+}
+
+// WriteOptions contains options for Endpoint.Write.
+type WriteOptions struct {
+	// If To is not nil, write to the given address instead of the endpoint's
+	// peer.
+	To *FullAddress
+
+	// More has the same semantics as Linux's MSG_MORE.
+	More bool
+
+	// EndOfRecord has the same semantics as Linux's MSG_EOR.
+	EndOfRecord bool
+}
+
 type Route struct {
 	Destination Address     // 目标地址
 	Mask        AddressMask // 掩码
@@ -263,9 +430,57 @@ type IPStats struct {
 	OutgoingPacketErrors *StatCounter
 }
 
-type TCPStats struct{}
+type TCPStats struct {
+	// ActiveConnectionOpenings is the number of connections opened successfully
+	// via Connect.
+	ActiveConnectionOpenings *StatCounter
 
-type UDPStats struct{}
+	// PassiveConnectionOpenings is the number of connections opened
+	// successfully via Listen.
+	PassiveConnectionOpenings *StatCounter
+
+	// FailedConnectionAttempts is the number of calls to Connect or Listen
+	// (active and passive openings, respectively) that end in an error.
+	FailedConnectionAttempts *StatCounter
+
+	// ValidSegmentsReceived is the number of TCP segments received that the
+	// transport layer successfully parsed.
+	ValidSegmentsReceived *StatCounter
+
+	// InvalidSegmentsReceived is the number of TCP segments received that
+	// the transport layer could not parse.
+	InvalidSegmentsReceived *StatCounter
+
+	// SegmentsSent is the number of TCP segments sent.
+	SegmentsSent *StatCounter
+
+	// ResetsSent is the number of TCP resets sent.
+	ResetsSent *StatCounter
+
+	// ResetsReceived is the number of TCP resets received.
+	ResetsReceived *StatCounter
+}
+
+type UDPStats struct {
+	// PacketsReceived is the number of UDP datagrams received via
+	// HandlePacket.
+	PacketsReceived *StatCounter
+
+	// UnknownPortErrors is the number of incoming UDP datagrams dropped
+	// because they did not have a known destination port.
+	UnknownPortErrors *StatCounter
+
+	// ReceiveBufferErrors is the number of incoming UDP datagrams dropped
+	// due to the receiving buffer being in an invalid state.
+	ReceiveBufferErrors *StatCounter
+
+	// MalformedPacketsReceived is the number of incoming UDP datagrams
+	// dropped due to the UDP header being in a malformed state.
+	MalformedPacketsReceived *StatCounter
+
+	// PacketsSent is the number of UDP datagrams sent via sendUDP.
+	PacketsSent *StatCounter
+}
 
 func fillIn(v reflect.Value) {
 	for i := 0; i < v.NumField(); i++ {
