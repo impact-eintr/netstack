@@ -1,6 +1,8 @@
 package fragmentation_test
 
 import (
+	"log"
+	"math"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/header"
@@ -23,6 +25,7 @@ type testContext struct {
 	t      *testing.T
 	linkEP *channel.Endpoint
 	s      *stack.Stack
+	id     uint16
 }
 
 func newTestContext(t *testing.T) *testContext {
@@ -55,6 +58,7 @@ func newTestContext(t *testing.T) *testContext {
 		t:      t,
 		s:      s,
 		linkEP: linkEP,
+		id:     uint16(time.Now().Unix() % math.MaxUint16),
 	}
 }
 
@@ -101,23 +105,24 @@ func TestFragmentationBase(t *testing.T) {
 		t.Fatalf("Case #1 Time Out\n")
 	}
 
-	// 一个纯粹的IP报文
-	v = make(buffer.View, header.IPv4MinimumSize+256)
+	// 一个纯粹的IP报文 Part1
+	pLen := ((1500 - header.EthernetMinimumSize - header.IPv4MinimumSize) >> 3) << 3
+	v = make(buffer.View, header.IPv4MinimumSize+pLen)
 	hdr := buffer.NewPrependable(header.IPv4MinimumSize)
 	ip := header.IPv4(hdr.Prepend(header.IPv4MinimumSize))
-	buf := make(buffer.View, 256)
+	buf := make(buffer.View, pLen)
 	for i := range buf {
 		buf[i] = 1
 	}
-	payload := buffer.NewVectorisedView(256, buf.ToVectorisedView().Views())
+	payload := buffer.NewVectorisedView(pLen, buf.ToVectorisedView().Views())
 	length := uint16(hdr.UsedLength() + payload.Size())
 	// ip首部编码
 	ip.Encode(&header.IPv4Fields{
 		IHL:            header.IPv4MinimumSize,
 		TotalLength:    length,
-		ID:             uint16(2),
+		ID:             c.id,
 		Flags:          0x1,
-		FragmentOffset: 1024,
+		FragmentOffset: 0,
 		TTL:            255,
 		Protocol:       uint8(0x6), // tcp 伪装报文
 		SrcAddr:        senderIPv4,
@@ -133,6 +138,31 @@ func TestFragmentationBase(t *testing.T) {
 		copy(h.ProtocolAddressTarget(), addr)
 		c.linkEP.Inject(ipv4.ProtocolNumber, v.ToVectorisedView()) // 往链路层注入一个arp报文 链路层将会自动分发它
 	}
+
+	inject(stackAddr1)
+
+	// 一个纯粹的IP报文 Part2
+	pLen = 256
+	v = make(buffer.View, header.IPv4MinimumSize+pLen)
+	payload = buffer.NewVectorisedView(pLen, buf.ToVectorisedView().Views())
+	length = uint16(hdr.UsedLength() + payload.Size())
+	// ip首部编码
+	ip.Encode(&header.IPv4Fields{
+		IHL:            header.IPv4MinimumSize,
+		TotalLength:    length,
+		ID:             c.id,
+		FragmentOffset: 1464,
+		TTL:            255,
+		Protocol:       uint8(0x6), // tcp 伪装报文
+		SrcAddr:        senderIPv4,
+		DstAddr:        stackAddr1,
+	})
+	//ip.SetFlagsFragmentOffset()
+	// 计算校验和和设置校验和
+	ip.SetChecksum(^ip.CalculateChecksum())
+	copy(v, ip)
+	copy(v[header.IPv4MinimumSize:], payload.First())
+	log.Println(ip.FragmentOffset())
 
 	inject(stackAddr1)
 

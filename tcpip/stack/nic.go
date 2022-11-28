@@ -365,7 +365,12 @@ func (n *NIC) DeliverNetworkPacket(linkEP LinkEndpoint, remoteLinkAddr, localLin
 		return
 	}
 	src, dst := netProto.ParseAddresses(vv.First())
-	log.Printf("设备[%v]准备从 [%s] 向 [%s] 分发数据: %v\n", linkEP.LinkAddress(), src, dst, vv.ToView())
+	log.Printf("设备[%v]准备从 [%s] 向 [%s] 分发数据: %v\n", linkEP.LinkAddress(), src, dst, func() []byte {
+		if len(vv.ToView()) > 64 {
+			return vv.ToView()[:64]
+		}
+		return vv.ToView()
+	}())
 	// 根据网络协议和数据包的目的地址，找到网络端
 	// 然后将数据包分发给网络层
 	if ref := n.getRef(protocol, dst); ref != nil {

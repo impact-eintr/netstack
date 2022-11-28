@@ -48,7 +48,7 @@ type IPv4Fields struct {
 	TotalLength uint16
 
 	// ID is the "identification" field of an IPv4 packet.
-	// 标识符
+	// 标识符 注意这个ID对于每个IP报文来说是唯一的 它的每个分片共享这个ID来标识它们同属一个报文
 	ID uint16
 
 	// Flags is the "flags" field of an IPv4 packet.
@@ -287,17 +287,27 @@ var ipv4Fmt string = `
 %v
 `
 
-type Types [] struct {}
+type Types []struct{}
 
-func atoi[T int | int8 | int16 | int32 | int64 | uint | uint8 |uint16 | uint32](i T) string {
+func atoi[T int | int8 | int16 | int32 | int64 | uint | uint8 | uint16 | uint32](i T) string {
 	return fmt.Sprintf("%d", i)
 }
 
 func (b IPv4) String() string {
+	for i := range b.Payload() {
+		if i != int(b.PayloadLength()-1) && b.Payload()[i]^b.Payload()[i+1] != 0 {
+			return fmt.Sprintf(ipv4Fmt, atoi(IPVersion(b)), atoi(b.HeaderLength()), atoi(0), atoi(b.TotalLength()),
+				atoi(b.ID()), atoi(b.Flags()>>2), atoi((b.Flags()&2)>>1), atoi(b.Flags()&1), atoi(b.FragmentOffset()),
+				atoi(b.TTL()), atoi(b.Protocol()), atoi(b.Checksum()),
+				b.SourceAddress().String(),
+				b.DestinationAddress().String(),
+				b.Payload())
+		}
+	}
 	return fmt.Sprintf(ipv4Fmt, atoi(IPVersion(b)), atoi(b.HeaderLength()), atoi(0), atoi(b.TotalLength()),
 		atoi(b.ID()), atoi(b.Flags()>>2), atoi((b.Flags()&2)>>1), atoi(b.Flags()&1), atoi(b.FragmentOffset()),
 		atoi(b.TTL()), atoi(b.Protocol()), atoi(b.Checksum()),
 		b.SourceAddress().String(),
 		b.DestinationAddress().String(),
-		b.Payload())
+		fmt.Sprintf("%v x %d", b.Payload()[0], b.PayloadLength()))
 }

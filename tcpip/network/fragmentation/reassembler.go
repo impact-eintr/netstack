@@ -30,6 +30,7 @@ type hole struct {
 	deleted bool
 }
 
+// 重组器对象
 type reassembler struct {
 	reassemblerEntry
 	id           uint32
@@ -37,7 +38,7 @@ type reassembler struct {
 	mu           sync.Mutex
 	holes        []hole
 	deleted      int
-	heap         fragHeap
+	heap         fragHeap // 小根堆用来自动排序
 	done         bool
 	creationTime time.Time
 }
