@@ -181,8 +181,12 @@ type NetworkEndpointID struct {
 
 // ==============================传输层相关==============================
 
+// TransportEndpointID 是某个传输层实现的标识
 type TransportEndpointID struct {
-	// TODO
+	LocalPort     uint16
+	LocalAddress  tcpip.Address
+	remotePort    uint16
+	RemoteAddress tcpip.Address
 }
 
 // ControlType 是网络层控制消息的类型
@@ -197,7 +201,7 @@ const (
 // TransportEndpoint 传输层实现接口
 type TransportEndpoint interface {
 	HandlePacket(r *Route, id TransportEndpointID, vv buffer.VectorisedView)
-	HandleControlPacker(id TransportEndpointID, typ ControlType, extra uint32, vv buffer.VectorisedView)
+	HandleControlPacket(id TransportEndpointID, typ ControlType, extra uint32, vv buffer.VectorisedView)
 }
 
 // TransportProtocol 传输层协议 TCP OR UDP

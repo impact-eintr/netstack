@@ -1,7 +1,6 @@
 package udp
 
 import (
-	"log"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/header"
@@ -28,7 +27,6 @@ func (*protocol) Number() tcpip.TransportProtocolNumber {
 // NewEndpoint creates a new udp endpoint.
 func (*protocol) NewEndpoint(stack *stack.Stack, netProto tcpip.NetworkProtocolNumber,
 	waiterQueue *waiter.Queue) (tcpip.Endpoint, *tcpip.Error) {
-	log.Println("新建udp传输层协议")
 	return newEndpoint(stack, netProto, waiterQueue), nil
 }
 

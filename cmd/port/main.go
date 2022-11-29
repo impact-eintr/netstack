@@ -152,8 +152,9 @@ func udpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, localPort int)
 	}
 
 	// 绑定IP和端口，这里的IP地址为空，表示绑定任何IP
+	// 0.0.0.0:9999 这台机器上的所有ip的9999段端口数据都会使用该传输层实现
 	// 此时就会调用端口管理器
-	if err := ep.Bind(tcpip.FullAddress{0, "", uint16(localPort)}, nil); err != nil {
+	if err := ep.Bind(tcpip.FullAddress{NIC: 0, Addr: "", Port: uint16(localPort)}, nil); err != nil {
 		log.Fatal("Bind failed: ", err)
 	}
 

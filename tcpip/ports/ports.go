@@ -1,6 +1,7 @@
 package ports
 
 import (
+	"log"
 	"math"
 	"math/rand"
 	"netstack/tcpip"
@@ -87,7 +88,7 @@ func (s *PortManager) isPortAvailableLocked(networks []tcpip.NetworkProtocolNumb
 	for _, network := range networks { // 遍历网络协议
 		desc := portDescriptor{network: network, transport: transport, port: port} // 构造端口描述符
 		if addrs, ok := s.allocatedPorts[desc]; ok {                               // 检查端口描述符绑定的ip集合
-			if !addrs.isAvailable(addr) { // 该集合中已经有这个ip
+			if !addrs.isAvailable(addr) { // 该集合中已经有这个ip 或者是"" 也就是 0.0.0.0
 				return false
 			}
 		}
@@ -101,5 +102,64 @@ func (s *PortManager) isPortAvailableLocked(networks []tcpip.NetworkProtocolNumb
 func (s *PortManager) ReservePort(networks []tcpip.NetworkProtocolNumber,
 	transport tcpip.TransportProtocolNumber,
 	addr tcpip.Address, port uint16) (reservedPort uint16, err *tcpip.Error) {
-	return 0, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// defer log.Println(transport, "成功分配端口", *(&reservedPort)) TODO 这样写就有问题 defer给直接取值了?
+	defer func() {
+		log.Println(transport, "成功分配端口", *(&reservedPort))
+	}()
+
+	// 指定端口进行绑定
+	if port != 0 {
+		if !s.reserveSpecificPort(networks, transport, addr, port) {
+			return 0, tcpip.ErrPortInUse // 已经被占用
+		}
+		reservedPort = port
+		return
+	}
+	// 随机分配
+	reservedPort, err = s.PickEphemeralPort(func(p uint16) (bool, *tcpip.Error) {
+		return s.reserveSpecificPort(networks, transport, addr, p), nil
+	})
+	return reservedPort, nil
+}
+
+// reserveSpecificPort 尝试根据协议号和IP地址绑定一个端口
+func (s *PortManager) reserveSpecificPort(networks []tcpip.NetworkProtocolNumber, transport tcpip.TransportProtocolNumber,
+	addr tcpip.Address, port uint16) bool {
+	if !s.isPortAvailableLocked(networks, transport, addr, port) {
+		return false
+	}
+
+	// 根据给定的网络层协议号绑定端口
+	for _, network := range networks {
+		desc := portDescriptor{network: network, transport: transport, port: port} // ipv4-udp-9999
+		m, ok := s.allocatedPorts[desc]
+		if !ok {
+			m = make(bindAddresses) // Set of IP
+			s.allocatedPorts[desc] = m
+		}
+		// 注册该地址被绑定了
+		m[addr] = struct{}{}
+	}
+	return true
+}
+
+// ReleasePort 释放绑定的端口，以便别的程序复用。
+func (s *PortManager) ReleasePort(networks []tcpip.NetworkProtocolNumber, transport tcpip.TransportProtocolNumber,
+	addr tcpip.Address, port uint16) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 删除绑定关系
+	for _, network := range networks {
+		desc := portDescriptor{network, transport, port}
+		if m, ok := s.allocatedPorts[desc]; ok {
+			log.Println(transport, "释放", port)
+			delete(m, addr)
+			if len(m) == 0 {
+				delete(s.allocatedPorts, desc)
+			}
+		}
+	}
 }

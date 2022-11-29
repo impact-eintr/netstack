@@ -162,7 +162,7 @@ func (s *Stack) NewEndpoint(transport tcpip.TransportProtocolNumber,
 	if !ok {
 		return nil, tcpip.ErrUnknownProtocol
 	}
-	return t.proto.NewEndpoint(s, network, waiterQueue)
+	return t.proto.NewEndpoint(s, network, waiterQueue) // 新建一个传输层实现
 }
 
 // CreateNIC 根据给定的网卡号 和 链路层设备号 创建一个网卡对象
@@ -300,7 +300,8 @@ func (s *Stack) FindRoute(id tcpip.NICID, localAddr, remoteAddr tcpip.Address,
 }
 
 // ===============本机链路层缓存实现==================
-// 检查本地是否绑定过该网络层地址
+
+// CheckLocalAddress 检查本地是否绑定过该网络层地址 注意 NICID 为0表示寻找本机所有网卡
 func (s *Stack) CheckLocalAddress(nicid tcpip.NICID, protocol tcpip.NetworkProtocolNumber, addr tcpip.Address) tcpip.NICID {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -361,4 +362,40 @@ func (s *Stack) RemoveWaker(nicid tcpip.NICID, addr tcpip.Address, waker *sleep.
 		fullAddr := tcpip.FullAddress{NIC: nicid, Addr: addr}
 		s.linkAddrCache.removeWaker(fullAddr, waker)
 	}
+}
+
+// RegisterTransportEndpoint 协议栈或者NIC的分流器注册给定传输层端点。
+// 收到的与提供的id匹配的数据包将被传送到给定的端点;指定nic是可选的，但特定于nic的ID优先于全局ID。
+// 最终调用 demuxer.registerEndpoint 函数来实现注册。
+func (s *Stack) RegisterTransportEndpoint(nicID tcpip.NICID, netProtos []tcpip.NetworkProtocolNumber,
+	protocol tcpip.TransportProtocolNumber, id TransportEndpointID, ep TransportEndpoint) *tcpip.Error {
+	// TODO 需要实现
+	return nil
+}
+
+// UnregisterTransportEndpoint removes the endpoint with the given id from the
+// stack transport dispatcher.
+func (s *Stack) UnregisterTransportEndpoint(nicID tcpip.NICID, netProtos []tcpip.NetworkProtocolNumber,
+	protocol tcpip.TransportProtocolNumber, id TransportEndpointID) {
+
+}
+
+// NetworkProtocolInstance returns the protocol instance in the stack for the
+// specified network protocol. This method is public for protocol implementers
+// and tests to use.
+func (s *Stack) NetworkProtocolInstance(num tcpip.NetworkProtocolNumber) NetworkProtocol {
+	if p, ok := s.networkProtocols[num]; ok {
+		return p
+	}
+	return nil
+}
+
+// TransportProtocolInstance returns the protocol instance in the stack for the
+// specified transport protocol. This method is public for protocol implementers
+// and tests to use.
+func (s *Stack) TransportProtocolInstance(num tcpip.TransportProtocolNumber) TransportProtocol {
+	if pState, ok := s.transportProtocols[num]; ok {
+		return pState.proto
+	}
+	return nil
 }

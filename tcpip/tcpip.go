@@ -165,7 +165,19 @@ func (l LinkAddress) String() string {
 
 type LinkEndpointID uint64
 
+// TransportProtocolNumber 传输层协议号
 type TransportProtocolNumber uint32
+
+const (
+	UDPProtocolNumber = 17
+)
+
+func (t TransportProtocolNumber) String() string {
+	if t == UDPProtocolNumber {
+		return "UDP"
+	}
+	return "TCP"
+}
 
 type NetworkProtocolNumber uint32
 
