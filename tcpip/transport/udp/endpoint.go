@@ -142,6 +142,7 @@ func (e *endpoint) checkV4Mapped(addr *tcpip.FullAddress, allowMismatch bool) (t
 }
 
 func (e *endpoint) Connect(address tcpip.FullAddress) *tcpip.Error {
+	log.Println("连接")
 	return nil
 }
 
