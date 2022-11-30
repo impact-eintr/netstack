@@ -76,6 +76,7 @@ type Options struct {
 	Stats tcpip.Stats
 }
 
+// New 新建一个网络协议栈
 func New(network []string, transport []string, opts Options) *Stack {
 	clock := opts.Clock
 	if clock == nil {
@@ -115,7 +116,9 @@ func New(network []string, transport []string, opts Options) *Stack {
 			proto: transProto,
 		}
 	}
-	// TODO 添加传输层分流器
+	// 添加传输层分流器
+	s.demux = newTransportDemuxer(s)
+
 	return s
 }
 

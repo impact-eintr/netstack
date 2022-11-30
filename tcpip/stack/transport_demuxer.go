@@ -21,3 +21,8 @@ type transportEndpoints struct {
 type transportDemuxer struct {
 	protocol map[protocolIDs]*transportEndpoints
 }
+
+// 新建一个分流器
+func newTransportDemuxer(stacl *Stack) *transportDemuxer {
+	return nil
+}

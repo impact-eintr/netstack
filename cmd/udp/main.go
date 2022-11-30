@@ -5,120 +5,32 @@ import (
 	"log"
 	"net"
 	"netstack/tcpip"
-	"netstack/tcpip/link/fdbased"
-	"netstack/tcpip/link/tuntap"
-	"netstack/tcpip/network/arp"
-	"netstack/tcpip/network/ipv4"
-	"netstack/tcpip/network/ipv6"
 	"netstack/tcpip/stack"
 	"netstack/tcpip/transport/udp"
 	"netstack/waiter"
 	"os"
-	"strconv"
-	"strings"
 )
-
-var mac = flag.String("mac", "01:01:01:01:01:01", "mac address to use in tap device")
 
 func main() {
 	flag.Parse()
-	if len(flag.Args()) != 3 {
-		log.Fatal("Usage: ", os.Args[0], " <tap-device> <listen-address> port")
+	if len(flag.Args()) != 2 {
+		log.Fatal("Usage: ", os.Args[0], "<listen-address> port")
 	}
 
 	log.SetFlags(log.Lshortfile | log.LstdFlags)
-	tapName := flag.Arg(0)
-	listeAddr := flag.Arg(1)
-	portName := flag.Arg(2)
+	listeAddr := flag.Arg(0)
+	portName := flag.Arg(1)
 
-	log.Printf("tap: %v, listeAddr: %v, portName: %v", tapName, listeAddr, portName)
+	Socket(listeAddr + ":" + portName)
+}
 
-	// Parse the mac address.
-	maddr, err := net.ParseMAC(*mac)
+func Socket(addr string) {
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		log.Fatalf("Bad MAC address: %v", *mac)
+		panic(err)
 	}
-
-	parsedAddr := net.ParseIP(listeAddr)
-
-	// 解析地址ip地址，ipv4或者ipv6地址都支持
-	var addr tcpip.Address
-	var proto tcpip.NetworkProtocolNumber
-	if parsedAddr.To4() != nil {
-		addr = tcpip.Address(parsedAddr.To4())
-		proto = ipv4.ProtocolNumber
-	} else if parsedAddr.To16() != nil {
-		addr = tcpip.Address(parsedAddr.To16())
-		proto = ipv6.ProtocolNumber
-	} else {
-		log.Fatalf("Unknown IP type: %v", parsedAddr)
-	}
-
-	localPort, err := strconv.Atoi(portName)
-	if err != nil {
-		log.Fatalf("Unable to convert port %v: %v", portName, err)
-	}
-
-	// 虚拟网卡配置
-	conf := &tuntap.Config{
-		Name: tapName,
-		Mode: tuntap.TAP,
-	}
-
-	var fd int
-	// 新建虚拟网卡
-	fd, err = tuntap.NewNetDev(conf)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// 启动tap网卡
-	_ = tuntap.SetLinkUp(tapName)
-	// 设置tap网卡IP地址
-	_ = tuntap.AddIP(tapName, listeAddr)
-
-	// 抽象网卡的文件接口
-	linkID := fdbased.New(&fdbased.Options{
-		FD:      fd,
-		MTU:     1500,
-		Address: tcpip.LinkAddress(maddr),
-	})
-
-	// 新建相关协议的协议栈
-	s := stack.New([]string{ipv4.ProtocolName, arp.ProtocolName},
-		[]string{ /*tcp.ProtocolName, */ udp.ProtocolName}, stack.Options{})
-
-	// 新建抽象的网卡
-	if err := s.CreateNamedNIC(1, "vnic1", linkID); err != nil {
-		log.Fatal(err)
-	}
-
-	// 在该协议栈上添加和注册相应的网络层
-	if err := s.AddAddress(1, proto, addr); err != nil {
-		log.Fatal(err)
-	}
-
-	// 在该协议栈上添加和注册ARP协议
-	if err := s.AddAddress(1, arp.ProtocolNumber, arp.ProtocolAddress); err != nil {
-		log.Fatal(err)
-	}
-
-	// 添加默认路由
-	s.SetRouteTable([]tcpip.Route{
-		{
-			Destination: tcpip.Address(strings.Repeat("\x00", len(addr))),
-			Mask:        tcpip.AddressMask(strings.Repeat("\x00", len(addr))),
-			Gateway:     "",
-			NIC:         1,
-		},
-	})
-
-	// 同时监听tcp和udp localPort端口
-	//tcpEp := tcpListen(s, proto, localPort)
-	udpEp := udpListen(s, proto, localPort)
-	// 关闭监听服务，此时会释放端口
-	//tcpEp.Close()
-	udpEp.Close()
+	conn.Write([]byte("udp\xc0\xa8\x01\x01\x27\x0f")) // bind udp 192.168.1.1 9999
+	conn.Close()
 }
 
 //func tcpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, localPort int) tcpip.Endpoint {
