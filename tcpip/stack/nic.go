@@ -60,7 +60,7 @@ func newNIC(stack *Stack, id tcpip.NICID, name string, ep LinkEndpoint) *NIC {
 		id:        id,
 		name:      name,
 		linkEP:    ep,
-		demux:     nil, // TODO 需要处理
+		demux:     newTransportDemuxer(stack), // NOTE 注册网卡自己的传输层分流器
 		primary:   make(map[tcpip.NetworkProtocolNumber]*ilist.List),
 		endpoints: make(map[NetworkEndpointID]*referencedNetworkEndpoint),
 	}
@@ -302,6 +302,75 @@ func (n *NIC) Subnets() []tcpip.Subnet {
 	return append(sns, n.subnets...)
 }
 
+// DeliverNetworkPacket 当 NIC 从物理接口接收数据包时，将调用函数 DeliverNetworkPacket，用来分发网络层数据包。
+// 比如 protocol 是 arp 协议号，那么会找到arp.HandlePacket来处理数据报。
+// 简单来说就是根据网络层协议和目的地址来找到相应的网络层端，将网络层数据发给它，
+// 当前实现的网络层协议有 arp、ipv4 和 ipv6。
+func (n *NIC) DeliverNetworkPacket(linkEP LinkEndpoint, remoteLinkAddr, localLinkAddr tcpip.LinkAddress,
+	protocol tcpip.NetworkProtocolNumber, vv buffer.VectorisedView) {
+	netProto, ok := n.stack.networkProtocols[protocol]
+	if !ok {
+		n.stack.stats.UnknownProtocolRcvdPackets.Increment()
+		return
+	}
+
+	if netProto.Number() == header.IPv4ProtocolNumber || netProto.Number() == header.IPv6ProtocolNumber {
+		n.stack.stats.IP.PacketsReceived.Increment()
+	}
+
+	if len(vv.First()) < netProto.MinimumPacketSize() {
+		n.stack.stats.MalformedRcvdPackets.Increment()
+		return
+	}
+	src, dst := netProto.ParseAddresses(vv.First())
+	log.Printf("设备[%v]准备从 [%s] 向 [%s] 分发数据: %v\n", linkEP.LinkAddress(), src, dst, func() []byte {
+		if len(vv.ToView()) > 64 {
+			return vv.ToView()[:64]
+		}
+		return vv.ToView()
+	}())
+	// 根据网络协议和数据包的目的地址，找到网络端
+	// 然后将数据包分发给网络层
+	if ref := n.getRef(protocol, dst); ref != nil {
+		r := makeRoute(protocol, dst, src, linkEP.LinkAddress(), ref)
+		r.RemoteLinkAddress = remoteLinkAddr
+		ref.ep.HandlePacket(&r, vv)
+		ref.decRef()
+		return
+	}
+
+	if n.stack.Forwarding() {
+		r, err := n.stack.FindRoute(0, "", dst, protocol)
+		if err != nil {
+			n.stack.stats.IP.InvalidAddressesReceived.Increment()
+			return
+		}
+		defer r.Release()
+
+		r.LocalLinkAddress = n.linkEP.LinkAddress()
+		r.RemoteLinkAddress = remoteLinkAddr
+
+		// Found a NIC.
+		n := r.ref.nic
+		n.mu.RLock()
+		ref, ok := n.endpoints[NetworkEndpointID{dst}]
+		n.mu.RUnlock()
+		if ok && ref.tryIncRef() {
+			ref.ep.HandlePacket(&r, vv)
+			ref.decRef()
+		} else {
+			// n doesn't have a destination endpoint.
+			// Send the packet out of n.
+			hdr := buffer.NewPrependableFromView(vv.First())
+			vv.RemoveFirst()
+			n.linkEP.WritePacket(&r, hdr, vv, protocol)
+		}
+		return
+	}
+
+	n.stack.stats.IP.InvalidAddressesReceived.Increment()
+}
+
 // 根据协议类型和目标地址，找出关联的Endpoint
 func (n *NIC) getRef(protocol tcpip.NetworkProtocolNumber, dst tcpip.Address) *referencedNetworkEndpoint {
 	id := NetworkEndpointID{dst}
@@ -344,57 +413,49 @@ func (n *NIC) getRef(protocol tcpip.NetworkProtocolNumber, dst tcpip.Address) *r
 	return nil
 }
 
-// DeliverNetworkPacket 当 NIC 从物理接口接收数据包时，将调用函数 DeliverNetworkPacket，用来分发网络层数据包。
-// 比如 protocol 是 arp 协议号，那么会找到arp.HandlePacket来处理数据报。
-// 简单来说就是根据网络层协议和目的地址来找到相应的网络层端，将网络层数据发给它，
-// 当前实现的网络层协议有 arp、ipv4 和 ipv6。
-func (n *NIC) DeliverNetworkPacket(linkEP LinkEndpoint, remoteLinkAddr, localLinkAddr tcpip.LinkAddress,
-	protocol tcpip.NetworkProtocolNumber, vv buffer.VectorisedView) {
-	netProto, ok := n.stack.networkProtocols[protocol]
-	if !ok {
-		n.stack.stats.UnknownProtocolRcvdPackets.Increment()
-		return
-	}
-
-	if netProto.Number() == header.IPv4ProtocolNumber || netProto.Number() == header.IPv6ProtocolNumber {
-		n.stack.stats.IP.PacketsReceived.Increment()
-	}
-
-	if len(vv.First()) < netProto.MinimumPacketSize() {
-		n.stack.stats.MalformedRcvdPackets.Increment()
-		return
-	}
-	src, dst := netProto.ParseAddresses(vv.First())
-	log.Printf("设备[%v]准备从 [%s] 向 [%s] 分发数据: %v\n", linkEP.LinkAddress(), src, dst, func() []byte {
-		if len(vv.ToView()) > 64 {
-			return vv.ToView()[:64]
-		}
-		return vv.ToView()
-	}())
-	// 根据网络协议和数据包的目的地址，找到网络端
-	// 然后将数据包分发给网络层
-	if ref := n.getRef(protocol, dst); ref != nil {
-		r := makeRoute(protocol, dst, src, linkEP.LinkAddress(), ref)
-		r.RemoteLinkAddress = remoteLinkAddr
-		ref.ep.HandlePacket(&r, vv)
-		ref.decRef()
-
-		return
-	}
-	n.stack.stats.IP.InvalidAddressesReceived.Increment()
-}
-
 // DeliverTransportPacket delivers packets to the appropriate
 // transport protocol endpoint.
 func (n *NIC) DeliverTransportPacket(r *Route, protocol tcpip.TransportProtocolNumber, vv buffer.VectorisedView) {
 	// 先查找协议栈是否注册了该传输层协议
-	_, ok := n.stack.transportProtocols[protocol]
+	state, ok := n.stack.transportProtocols[protocol]
 	if !ok {
 		n.stack.stats.UnknownProtocolRcvdPackets.Increment()
 		return
 	}
-	log.Println("准备分发传输层数据报", n.stack.transportProtocols)
+	transProto := state.proto
+	// 如果报文长度比该协议最小报文长度还小，那么丢弃它
+	if len(vv.First()) < transProto.MinimumPacketSize() {
+		n.stack.stats.MalformedRcvdPackets.Increment()
+		return
+	}
+	// 解析报文得到源端口和目的端口
+	srcPort, dstPort, err := transProto.ParsePorts(vv.First())
+	if err != nil {
+		n.stack.stats.MalformedRcvdPackets.Increment()
+		return
+	}
+	log.Println("准备分发传输层数据报", n.stack.transportProtocols, srcPort, dstPort)
+	id := TransportEndpointID{dstPort, r.LocalAddress, srcPort, r.RemoteAddress}
+	// 调用分流器，根据传输层协议和传输层id分发数据报文
+	if n.demux.deliverPacket(r, protocol, vv, id) {
+		return
+	}
+	if n.stack.demux.deliverPacket(r, protocol, vv, id) {
+		return
+	}
 
+	// Try to deliver to per-stack default handler.
+	if state.defaultHandler != nil {
+		if state.defaultHandler(r, id, vv) {
+			return
+		}
+	}
+
+	// We could not find an appropriate destination for this packet, so
+	// deliver it to the global handler.
+	if !transProto.HandleUnknownDestinationPacket(r, id, vv) {
+		n.stack.stats.MalformedRcvdPackets.Increment()
+	}
 }
 
 // DeliverTransportControlPacket delivers control packets to the

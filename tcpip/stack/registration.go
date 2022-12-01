@@ -185,7 +185,7 @@ type NetworkEndpointID struct {
 type TransportEndpointID struct {
 	LocalPort     uint16
 	LocalAddress  tcpip.Address
-	remotePort    uint16
+	RemotePort    uint16
 	RemoteAddress tcpip.Address
 }
 

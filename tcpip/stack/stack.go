@@ -116,10 +116,85 @@ func New(network []string, transport []string, opts Options) *Stack {
 			proto: transProto,
 		}
 	}
-	// 添加传输层分流器
+	// NOTE 添加协议栈全局传输层分流器
 	s.demux = newTransportDemuxer(s)
 
 	return s
+}
+
+// SetNetworkProtocolOption allows configuring individual protocol level
+// options. This method returns an error if the protocol is not supported or
+// option is not supported by the protocol implementation or the provided value
+// is incorrect.
+func (s *Stack) SetNetworkProtocolOption(network tcpip.NetworkProtocolNumber, option interface{}) *tcpip.Error {
+	netProto, ok := s.networkProtocols[network]
+	if !ok {
+		return tcpip.ErrUnknownProtocol
+	}
+	return netProto.SetOption(option)
+}
+
+// NetworkProtocolOption allows retrieving individual protocol level option
+// values. This method returns an error if the protocol is not supported or
+// option is not supported by the protocol implementation.
+// e.g.
+// var v ipv4.MyOption
+// err := s.NetworkProtocolOption(tcpip.IPv4ProtocolNumber, &v)
+//
+//	if err != nil {
+//	  ...
+//	}
+func (s *Stack) NetworkProtocolOption(network tcpip.NetworkProtocolNumber, option interface{}) *tcpip.Error {
+	netProto, ok := s.networkProtocols[network]
+	if !ok {
+		return tcpip.ErrUnknownProtocol
+	}
+	return netProto.Option(option)
+}
+
+// SetTransportProtocolOption allows configuring individual protocol level
+// options. This method returns an error if the protocol is not supported or
+// option is not supported by the protocol implementation or the provided value
+// is incorrect.
+func (s *Stack) SetTransportProtocolOption(transport tcpip.TransportProtocolNumber, option interface{}) *tcpip.Error {
+	transProtoState, ok := s.transportProtocols[transport]
+	if !ok {
+		return tcpip.ErrUnknownProtocol
+	}
+	return transProtoState.proto.SetOption(option)
+}
+
+// TransportProtocolOption allows retrieving individual protocol level option
+// values. This method returns an error if the protocol is not supported or
+// option is not supported by the protocol implementation.
+// var v tcp.SACKEnabled
+//
+//	if err := s.TransportProtocolOption(tcpip.TCPProtocolNumber, &v); err != nil {
+//	  ...
+//	}
+func (s *Stack) TransportProtocolOption(transport tcpip.TransportProtocolNumber, option interface{}) *tcpip.Error {
+	transProtoState, ok := s.transportProtocols[transport]
+	if !ok {
+		return tcpip.ErrUnknownProtocol
+	}
+	return transProtoState.proto.Option(option)
+}
+
+// SetTransportProtocolHandler sets the per-stack default handler for the given
+// protocol.
+//
+// It must be called only during initialization of the stack. Changing it as the
+// stack is operating is not supported.
+func (s *Stack) SetTransportProtocolHandler(p tcpip.TransportProtocolNumber, h func(*Route, TransportEndpointID, buffer.VectorisedView) bool) {
+	state := s.transportProtocols[p]
+	if state != nil {
+		state.defaultHandler = h
+	}
+}
+
+// NowNanoseconds implements tcpip.Clock.NowNanoseconds.
+func (s *Stack) NowNanoseconds() int64 {
+	return s.clock.NowNanoseconds()
 }
 
 func (s *Stack) Stats() tcpip.Stats {
@@ -260,19 +335,19 @@ func (s *Stack) ContainsSubnet(id tcpip.NICID, subnet tcpip.Subnet) (bool, *tcpi
 	return false, tcpip.ErrUnknownNICID
 }
 
-// 路由查找实现，比如当tcp建立连接时，会用该函数得到路由信息
+// FindRoute 路由查找实现，比如当tcp建立连接时，会用该函数得到路由信息
 func (s *Stack) FindRoute(id tcpip.NICID, localAddr, remoteAddr tcpip.Address,
 	netProto tcpip.NetworkProtocolNumber) (Route, *tcpip.Error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for i := range s.routeTable {
-		if (id != 0 && id != s.routeTable[i].NIC) ||
+		if (id != 0 && id != s.routeTable[i].NIC) || // 检查是否是对应的网卡
 			(len(remoteAddr) != 0 && !s.routeTable[i].Match(remoteAddr)) {
 			continue
 		}
 
-		nic := s.nics[s.routeTable[i].NIC]
+		nic := s.nics[s.routeTable[i].NIC] // 在协议栈里找到这张网卡
 		if nic == nil {
 			continue
 		}
@@ -372,14 +447,34 @@ func (s *Stack) RemoveWaker(nicid tcpip.NICID, addr tcpip.Address, waker *sleep.
 // 最终调用 demuxer.registerEndpoint 函数来实现注册。
 func (s *Stack) RegisterTransportEndpoint(nicID tcpip.NICID, netProtos []tcpip.NetworkProtocolNumber,
 	protocol tcpip.TransportProtocolNumber, id TransportEndpointID, ep TransportEndpoint) *tcpip.Error {
-	// TODO 需要实现
-	return nil
+	log.Println("往", nicID, "网卡注册新的传输端")
+	if nicID == 0 {
+		return s.demux.registerEndpoint(netProtos, protocol, id, ep) // 给协议栈的所有网卡注册传输端
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	nic := s.nics[nicID]
+	if nic == nil {
+		return tcpip.ErrUnknownNICID
+	}
+	return nic.demux.registerEndpoint(netProtos, protocol, id, ep) // 给这张网卡注册传输端
 }
 
 // UnregisterTransportEndpoint removes the endpoint with the given id from the
 // stack transport dispatcher.
 func (s *Stack) UnregisterTransportEndpoint(nicID tcpip.NICID, netProtos []tcpip.NetworkProtocolNumber,
 	protocol tcpip.TransportProtocolNumber, id TransportEndpointID) {
+	if nicID == 0 {
+		s.demux.unregisterEndpoint(netProtos, protocol, id)
+		return
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	nic := s.nics[nicID]
+	if nic != nil {
+		nic.demux.unregisterEndpoint(netProtos, protocol, id)
+	}
 
 }
 

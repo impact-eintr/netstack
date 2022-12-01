@@ -2,7 +2,10 @@ package header
 
 import "netstack/tcpip"
 
-// 校验和的计算
+// Checksum 校验和的计算
+// UDP 检验和的计算方法是： 按每 16 位求和得出一个 32 位的数；
+// 如果这个 32 位的数，高 16 位不为 0，则高 16 位加低 16 位再得到一个 32 位的数；
+// 重复第 2 步直到高 16 位为 0，将低 16 位取反，得到校验和。
 func Checksum(buf []byte, initial uint16) uint16 {
 	v := uint32(initial)
 

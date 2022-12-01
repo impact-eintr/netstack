@@ -38,9 +38,8 @@ func (*protocol) MinimumPacketSize() int {
 // ParsePorts returns the source and destination ports stored in the given udp
 // packet.
 func (*protocol) ParsePorts(v buffer.View) (src, dst uint16, err *tcpip.Error) {
-	//h := header.UDP(v)
-	//return h.SourcePort(), h.DestinationPort(), nil
-	return 0, 0, nil
+	h := header.UDP(v)
+	return h.SourcePort(), h.DestinationPort(), nil
 }
 
 // HandleUnknownDestinationPacket handles packets targeted at this protocol but
