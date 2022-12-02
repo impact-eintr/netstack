@@ -77,7 +77,6 @@ func New(opts *Options) tcpip.LinkEndpointID {
 		iovecs:      make([]syscall.Iovec, len(BufConfig)),
 		handleLocal: opts.HandleLocal,
 	}
-
 	// 全局注册链路层设备
 	return stack.RegisterLinkEndpoint(e)
 }

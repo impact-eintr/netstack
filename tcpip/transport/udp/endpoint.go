@@ -436,7 +436,7 @@ func (e *endpoint) GetSockOpt(opt interface{}) *tcpip.Error {
 // 但是队列存数据量是有限制的，这个限制叫接收缓存大小，当接收队列中的数据总和超过这个缓存，那么接下来的这些报文将会被直接丢包。
 func (e *endpoint) HandlePacket(r *stack.Route, id stack.TransportEndpointID, vv buffer.VectorisedView) {
 	// Get the header then trim it from the view.
-	hdr := header.UDP(vv.First())
+	hdr := header.UDP(vv.ToView())
 	if int(hdr.Length()) > vv.Size() {
 		// Malformed packet.
 		// 错误报文

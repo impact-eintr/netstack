@@ -27,7 +27,7 @@ func main() {
 	log.Println("TEST")
 
 	for i := 0; i < 3; i++ {
-		send := []byte("hello" + string(i))
+		send := make([]byte, 2048)
 		if _, err := conn.Write(send); err != nil {
 			panic(err)
 		}

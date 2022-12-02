@@ -155,7 +155,7 @@ func (conn *UdpConn) Read(rcv []byte) (int, error) {
 			}
 			return 0, fmt.Errorf("%s", err.String())
 		}
-		rcv = append(rcv[:0], buf...)
+		rcv = append(rcv[:0], buf[:cap(rcv)]...)
 		return len(rcv), nil
 	}
 }
