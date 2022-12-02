@@ -484,7 +484,7 @@ func (e *endpoint) HandlePacket(r *stack.Route, id stack.TransportEndpointID, vv
 	e.rcvMu.Unlock()
 	// TODO 通知用户层可以读取数据了
 	if wasEmpty {
-
+		e.waiterQueue.Notify(waiter.EventIn)
 	}
 }
 

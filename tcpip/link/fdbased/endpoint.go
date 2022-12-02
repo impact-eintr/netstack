@@ -202,7 +202,16 @@ func (e *endpoint) dispatch() (bool, *tcpip.Error) {
 	vv := buffer.NewVectorisedView(n, e.views[:used]) // 用这些有效的内容构建vv
 	vv.TrimFront(e.hdrSize)                           // 将数据内容删除以太网头部信息 将网络层作为数据头
 
-	e.dispatcher.DeliverNetworkPacket(e, remoteLinkAddr, localLinkAddr, p, vv)
+	switch p {
+	case header.ARPProtocolNumber, header.IPv4ProtocolNumber:
+		log.Println("链路层收到报文")
+		e.dispatcher.DeliverNetworkPacket(e, remoteLinkAddr, localLinkAddr, p, vv)
+	case header.IPv6ProtocolNumber:
+		// TODO ipv6暂时不感兴趣
+		e.dispatcher.DeliverNetworkPacket(e, remoteLinkAddr, localLinkAddr, p, vv)
+	default:
+		log.Println("未知类型的非法报文")
+	}
 
 	// 将分发后的数据无效化(设置nil可以让gc回收这些内存)
 	for i := 0; i < used; i++ {

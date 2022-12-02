@@ -1,13 +1,11 @@
 package main
 
 import (
-	"encoding/binary"
 	"flag"
-	"io"
+	"fmt"
 	"log"
 	"net"
 	"netstack/tcpip"
-	"netstack/tcpip/header"
 	"netstack/tcpip/link/fdbased"
 	"netstack/tcpip/link/tuntap"
 	"netstack/tcpip/network/arp"
@@ -17,7 +15,6 @@ import (
 	"netstack/waiter"
 	"os"
 	"strings"
-	"time"
 )
 
 func main() {
@@ -111,33 +108,59 @@ func main() {
 
 	go func() {
 		// 监听udp localPort端口
-		udpEp := udpListen(s, proto, 9999)
+		conn := udpListen(s, proto, 9999)
 
 		for {
-			buf, _, err := udpEp.Read(nil)
+			buf := make([]byte, 1024)
+			n, err := conn.Read(buf)
 			if err != nil {
-				if err == tcpip.ErrWouldBlock {
-					time.Sleep(100 * time.Millisecond)
-					log.Println("阻塞中")
-					continue
-				}
+				log.Println(err)
+				break
 			}
-			log.Println(buf)
-			break
+			log.Println("接收到数据", buf[:n])
 		}
 		// 关闭监听服务，此时会释放端口
-		udpEp.Close()
+		conn.Close()
 	}()
 
-	conn, _ := net.Listen("tcp", "0.0.0.0:9999")
-	rcv := &RCV{
-		Stack: s,
-		addr:  tcpip.FullAddress{},
-	}
-	TCPServer(conn, rcv)
+	select {}
+	//conn, _ := net.Listen("tcp", "0.0.0.0:9999")
+	//rcv := &RCV{
+	//	Stack: s,
+	//	addr:  tcpip.FullAddress{},
+	//}
+	//TCPServer(conn, rcv)
 }
 
-func udpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, localPort int) tcpip.Endpoint {
+type UdpConn struct {
+	ep       tcpip.Endpoint
+	wq       *waiter.Queue
+	we       *waiter.Entry
+	notifyCh chan struct{}
+}
+
+func (conn *UdpConn) Close() {
+	conn.ep.Close()
+}
+
+func (conn *UdpConn) Read(rcv []byte) (int, error) {
+	conn.wq.EventRegister(conn.we, waiter.EventIn)
+	defer conn.wq.EventUnregister(conn.we)
+	for {
+		buf, _, err := conn.ep.Read(nil)
+		if err != nil {
+			if err == tcpip.ErrWouldBlock {
+				<-conn.notifyCh
+				continue
+			}
+			return 0, fmt.Errorf("%s", err.String())
+		}
+		rcv = append(rcv[:0], buf...)
+		return len(rcv), nil
+	}
+}
+
+func udpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, localPort int) *UdpConn {
 	var wq waiter.Queue
 	// 新建一个udp端
 	ep, err := s.NewEndpoint(udp.ProtocolNumber, proto, &wq)
@@ -152,62 +175,6 @@ func udpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, localPort int)
 		log.Fatal("Bind failed: ", err)
 	}
 
-	// 注意UDP是无连接的，它不需要Listen
-	return ep
-}
-
-type RCV struct {
-	*stack.Stack
-	ep     tcpip.Endpoint
-	addr   tcpip.FullAddress
-	rcvBuf []byte
-}
-
-var transportPool = make(map[uint64]tcpip.Endpoint)
-
-func (r *RCV) Handle(conn net.Conn) {
-	var err error
-	r.rcvBuf, err = io.ReadAll(conn)
-	if err != nil && len(r.rcvBuf) < 9 { // proto + ip + port
-		panic(err)
-	}
-
-	switch string(r.rcvBuf[:3]) {
-	case "udp":
-		var wq waiter.Queue
-		// 新建一个udp端
-		ep, err := r.NewEndpoint(udp.ProtocolNumber, header.IPv4ProtocolNumber, &wq)
-		if err != nil {
-			log.Fatal(err)
-		}
-		r.ep = ep
-		r.Bind()
-		r.Connect()
-		r.Close()
-	case "tcp":
-	default:
-		return
-	}
-}
-
-func (r *RCV) Bind() {
-	if len(r.rcvBuf) < 9 { // udp ip port
-		log.Println("Error: too few arg")
-		return
-	}
-	port := binary.BigEndian.Uint16(r.rcvBuf[7:9])
-	r.addr = tcpip.FullAddress{
-		NIC:  1,
-		Addr: tcpip.Address(r.rcvBuf[3:7]),
-		Port: port,
-	}
-	r.ep.Bind(r.addr, nil)
-}
-
-func (r *RCV) Connect() {
-	r.ep.Connect(tcpip.FullAddress{NIC: 1, Addr: "\xc0\xa8\x01\x02", Port: 8888})
-}
-
-func (r *RCV) Close() {
-	r.ep.Close()
+	waitEntry, notifyCh := waiter.NewChannelEntry(nil)
+	return &UdpConn{ep, &wq, &waitEntry, notifyCh}
 }

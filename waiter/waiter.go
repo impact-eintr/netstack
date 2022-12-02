@@ -63,6 +63,8 @@ import (
 	"netstack/ilist"
 )
 
+// TODO 看事件机制
+
 // EventMask represents io events as used in the poll() syscall.
 type EventMask uint16
 

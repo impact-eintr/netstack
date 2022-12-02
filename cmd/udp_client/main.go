@@ -26,12 +26,13 @@ func main() {
 	}
 	log.Println("TEST")
 
-	send := []byte("hello")
-
-	if _, err := conn.Write(send); err != nil {
-		panic(err)
+	for i := 0; i < 3; i++ {
+		send := []byte("hello" + string(i))
+		if _, err := conn.Write(send); err != nil {
+			panic(err)
+		}
+		log.Printf("send: %s", string(send))
 	}
-	log.Printf("send: %s", string(send))
 
 	//recv := make([]byte, 10)
 	//rn, _, err := conn.ReadFrom(recv)
