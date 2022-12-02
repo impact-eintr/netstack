@@ -201,7 +201,8 @@ func (c *linkAddrCache) makeAndAddEntry(k tcpip.FullAddress, v tcpip.LinkAddress
 }
 
 // get reports any known link address for k.
-func (c *linkAddrCache) get(k tcpip.FullAddress, linkRes LinkAddressResolver, localAddr tcpip.Address, linkEP LinkEndpoint, waker *sleep.Waker) (tcpip.LinkAddress, <-chan struct{}, *tcpip.Error) {
+func (c *linkAddrCache) get(k tcpip.FullAddress, linkRes LinkAddressResolver,
+	localAddr tcpip.Address, linkEP LinkEndpoint, waker *sleep.Waker) (tcpip.LinkAddress, <-chan struct{}, *tcpip.Error) {
 	log.Println("在arp本地缓存中寻找", k)
 	if linkRes != nil {
 		if addr, ok := linkRes.ResolveStaticAddress(k.Addr); ok {
@@ -214,7 +215,7 @@ func (c *linkAddrCache) get(k tcpip.FullAddress, linkRes LinkAddressResolver, lo
 	// 尝试从缓存中得到MAC地址
 	if entry, ok := c.cache[k]; ok {
 		switch s := entry.state(); s {
-		case expired:
+		case expired: // 过期了
 		case ready:
 			return entry.linkAddr, nil, nil
 		case failed:
@@ -251,7 +252,8 @@ func (c *linkAddrCache) removeWaker(k tcpip.FullAddress, waker *sleep.Waker) {
 	}
 }
 
-func (c *linkAddrCache) startAddressResolution(k tcpip.FullAddress, linkRes LinkAddressResolver, localAddr tcpip.Address, linkEP LinkEndpoint, done <-chan struct{}) {
+func (c *linkAddrCache) startAddressResolution(k tcpip.FullAddress, linkRes LinkAddressResolver,
+	localAddr tcpip.Address, linkEP LinkEndpoint, done <-chan struct{}) {
 	for i := 0; ; i++ {
 		// Send link request, then wait for the timeout limit and check
 		// whether the request succeeded.

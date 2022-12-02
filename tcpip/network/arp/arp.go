@@ -151,7 +151,7 @@ func (*protocol) LinkAddressRequest(addr, localAddr tcpip.Address, linkEP stack.
 	copy(h.HardwareAddressSender(), linkEP.LinkAddress())
 	copy(h.ProtocolAddressSender(), localAddr)
 	copy(h.ProtocolAddressTarget(), addr)
-
+	log.Println("arp发起广播 寻找:", addr)
 	return linkEP.WritePacket(r, hdr, buffer.VectorisedView{}, ProtocolNumber)
 }
 

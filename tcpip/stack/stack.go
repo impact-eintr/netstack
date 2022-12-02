@@ -13,7 +13,8 @@ import (
 
 const (
 	// ageLimit is set to the same cache stale time used in Linux.
-	ageLimit = 1 * time.Minute
+	//ageLimit = 1 * time.Minute
+	ageLimit = 5 * time.Second
 	// resolutionTimeout is set to the same ARP timeout used in Linux.
 	resolutionTimeout = 1 * time.Second
 	// resolutionAttempts is set to the same ARP retries used in Linux.

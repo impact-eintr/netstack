@@ -184,10 +184,17 @@ func (conn *UdpConn) Read(rcv []byte) (int, error) {
 	}
 }
 
-func (conn *UdpConn) Write(snd []byte) {
-	_, _, err := conn.ep.Write(tcpip.SlicePayload(snd), tcpip.WriteOptions{To: &conn.raddr})
-	if err != nil {
-		log.Fatal(err)
+func (conn *UdpConn) Write(snd []byte) error {
+	for {
+		_, notifyCh, err := conn.ep.Write(tcpip.SlicePayload(snd), tcpip.WriteOptions{To: &conn.raddr})
+		if err != nil {
+			if err == tcpip.ErrNoLinkAddress {
+				<-notifyCh
+				continue
+			}
+			return fmt.Errorf("%s", err.String())
+		}
+		return nil
 	}
 }
 
