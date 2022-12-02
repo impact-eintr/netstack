@@ -108,7 +108,7 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable, payload b
 
 	// 写入网卡接口
 	if protocol == header.ICMPv4ProtocolNumber {
-		log.Printf("IP 写回ICMP报文 长度: %d\n", hdr.UsedLength()+payload.Size())
+		log.Println("IP 写回ICMP报文", header.IPv4(append(ip, payload.ToView()...)))
 	} else {
 		//log.Printf("send ipv4 packet %d bytes, proto: 0x%x", hdr.UsedLength()+payload.Size(), protocol)
 		log.Println(header.IPv4(append(ip, payload.ToView()...)))
@@ -132,7 +132,6 @@ func (e *endpoint) HandlePacket(r *stack.Route, vv buffer.VectorisedView) {
 	tlen := int(h.TotalLength())
 	vv.TrimFront(hlen)
 	vv.CapLength(tlen - hlen)
-	log.Println(hlen, tlen)
 
 	// 报文重组
 	more := (h.Flags() & header.IPv4FlagMoreFragments) != 0
@@ -157,7 +156,7 @@ func (e *endpoint) HandlePacket(r *stack.Route, vv buffer.VectorisedView) {
 	}
 	r.Stats().IP.PacketsDelivered.Increment()
 	// 根据协议分发到不同处理函数，比如协议时TCP，会进入tcp.HandlePacket
-	log.Printf("recv ipv4 packet %d bytes, proto: 0x%x", tlen, p)
+	log.Printf("准备前往 UDP/TCP recv ipv4 packet %d bytes, proto: 0x%x", tlen, p)
 	e.dispatcher.DeliverTransportPacket(r, p, vv)
 }
 

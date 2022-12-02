@@ -2,6 +2,8 @@ package udp
 
 import (
 	"log"
+	"math"
+	"netstack/sleep"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/header"
@@ -35,9 +37,8 @@ const (
 type endpoint struct {
 	stack       *stack.Stack                // udp所依赖的用户协议栈
 	netProto    tcpip.NetworkProtocolNumber // udp网络协议号 ipv4/ipv6
-	waiterQueue *waiter.Queue               // TODO 需要解析
+	waiterQueue *waiter.Queue               // 事件驱动机制
 
-	// TODO 需要解析
 	// The following fields are used to manage the receive queue, and are
 	// protected by rcvMu.
 	rcvMu         sync.Mutex
@@ -130,8 +131,29 @@ func (e *endpoint) Close() {
 		e.stack.ReleasePort(e.effectiveNetProtos, ProtocolNumber, e.id.LocalAddress, e.id.LocalPort)
 	}
 
-	// TODO
+	for _, mem := range e.multicastMemberships {
+		e.stack.LeaveGroup(e.netProto, mem.nicID, mem.multicastAddr)
+	}
+	e.multicastMemberships = nil
+
+	// Close the receive list and drain it.
+	e.rcvMu.Lock()
+	e.rcvClosed = true
+	e.rcvBufSize = 0
+	// 清空接收链表
+	for !e.rcvList.Empty() {
+		p := e.rcvList.Front()
+		e.rcvList.Remove(p)
+	}
+	e.rcvMu.Unlock()
+
+	e.route.Release()
+
+	// Update the state.
+	e.state = stateClosed
+
 	e.mu.Unlock()
+	e.waiterQueue.Notify(waiter.EventHUp | waiter.EventErr | waiter.EventIn | waiter.EventOut)
 }
 
 func (e *endpoint) Read(addr *tcpip.FullAddress) (buffer.View, tcpip.ControlMessages, *tcpip.Error) {
@@ -167,8 +189,188 @@ func (e *endpoint) Read(addr *tcpip.FullAddress) (buffer.View, tcpip.ControlMess
 	return p.data.ToView(), tcpip.ControlMessages{HasTimestamp: ts, Timestamp: p.timestamp}, nil
 }
 
-func (e *endpoint) Write(tcpip.Payload, tcpip.WriteOptions) (uintptr, <-chan struct{}, *tcpip.Error) {
-	return 0, nil, nil
+// sendUDP sends a UDP segment via the provided network endpoint and under the
+// provided identity.
+// 增加UDP头部信息，并发送给给网络层
+func sendUDP(r *stack.Route, data buffer.VectorisedView, localPort, remotePort uint16, ttl uint8) *tcpip.Error {
+	// Allocate a buffer for the UDP header.
+	hdr := buffer.NewPrependable(header.UDPMinimumSize + int(r.MaxHeaderLength()))
+
+	// Initialize the header.
+	udp := header.UDP(hdr.Prepend(header.UDPMinimumSize))
+
+	// 得到报文的长度
+	length := uint16(hdr.UsedLength() + data.Size())
+	// UDP首部的编码
+	udp.Encode(&header.UDPFields{
+		SrcPort: localPort,
+		DstPort: remotePort,
+		Length:  length,
+	})
+
+	// Only calculate the checksum if offloading isn't supported.
+	if r.Capabilities()&stack.CapabilityChecksumOffload == 0 {
+		// 检验和的计算
+		xsum := r.PseudoHeaderChecksum(ProtocolNumber)
+		for _, v := range data.Views() {
+			xsum = header.Checksum(v, xsum)
+		}
+		udp.SetChecksum(^udp.CalculateChecksum(xsum, length))
+	}
+
+	// Track count of packets sent.
+	r.Stats().UDP.PacketsSent.Increment()
+
+	// 将准备好的UDP首部和数据写给网络层
+	log.Printf("send udp %d bytes", hdr.UsedLength()+data.Size())
+	return r.WritePacket(hdr, data, ProtocolNumber, ttl)
+}
+
+// 写数据之前的准备，如果还是初始状态需要先进性绑定操作。
+func (e *endpoint) prepareForWrite(to *tcpip.FullAddress) (retry bool, err *tcpip.Error) {
+	switch e.state {
+	case stateInitial:
+	case stateConnected:
+		return false, nil
+
+	case stateBound:
+		if to == nil {
+			return false, tcpip.ErrDestinationRequired
+		}
+		return false, nil
+	default:
+		return false, tcpip.ErrInvalidEndpointState
+	}
+
+	e.mu.RUnlock()
+	defer e.mu.RLock()
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// The state changed when we released the shared locked and re-acquired
+	// it in exclusive mode. Try again.
+	if e.state != stateInitial {
+		return true, nil
+	}
+
+	// The state is still 'initial', so try to bind the endpoint.
+	if err := e.bindLocked(tcpip.FullAddress{}, nil); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// Write 用户层最终调用该函数，发送数据包给对端，即使数据写失败，也不会阻塞。
+func (e *endpoint) Write(p tcpip.Payload, opts tcpip.WriteOptions) (uintptr, <-chan struct{}, *tcpip.Error) {
+	// MSG_MORE is unimplemented. (This also means that MSG_EOR is a no-op.)
+	if opts.More {
+		return 0, nil, tcpip.ErrInvalidOptionValue
+	}
+	// NOTE 如果报文长度超过65535，将会超过UDP最大的长度表示，这是不允许的。
+	if p.Size() > math.MaxUint16 {
+		// Payload can't possibly fit in a packet.
+		return 0, nil, tcpip.ErrMessageTooLong
+	}
+	to := opts.To
+
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	log.Println("UDP 准备向 路由", to, "写入数据")
+	// If we've shutdown with SHUT_WR we are in an invalid state for sending.
+	// 如果设置了关闭写数据，那返回错误
+	if e.shutdownFlags&tcpip.ShutdownWrite != 0 {
+		return 0, nil, tcpip.ErrClosedForSend
+	}
+
+	var route *stack.Route
+	var dstPort uint16
+	if to == nil {
+		// 如果没有指定发送的地址，用UDP端 Connect 得到的路由和目的端口
+		route = &e.route
+		dstPort = e.dstPort
+
+		if route.IsResolutionRequired() {
+			// Promote lock to exclusive if using a shared route, given that it may need to
+			// change in Route.Resolve() call below.
+			// 如果使用共享路由，则将锁定提升为独占路由，因为它可能需要在下面的Route.Resolve（）调用中进行更改。
+			e.mu.RUnlock()
+			defer e.mu.RLock()
+
+			e.mu.Lock()
+			defer e.mu.Unlock()
+
+			// Recheck state after lock was re-acquired.
+			// 锁定后重新检查状态。
+			if e.state != stateConnected {
+				return 0, nil, tcpip.ErrInvalidEndpointState
+			}
+		}
+	} else { // 如果指定了发送地址和端口
+		nicid := to.NIC
+		// 如果绑定了网卡
+		if e.bindNICID != 0 {
+			if nicid != 0 && nicid != e.bindNICID {
+				return 0, nil, tcpip.ErrNoRoute // 指定了网卡但udp端没绑定这张网卡
+			}
+			nicid = e.bindNICID // 如果没指定网卡就用这张绑定过的网卡
+		}
+		// 得到目的IP+端口
+		toCopy := *to
+		to = &toCopy
+		netProto, err := e.checkV4Mapped(to, false)
+		if err != nil {
+			return 0, nil, err
+		}
+		// Find the enpoint.
+		// 根据目的地址和协议找到相关路由信息
+		r, err := e.stack.FindRoute(nicid, e.id.LocalAddress, to.Addr, netProto)
+		if err != nil {
+			return 0, nil, err
+		}
+		defer r.Release()
+
+		route = &r
+		dstPort = to.Port
+	}
+
+	// TODO
+	// 如果路由没有下一跳的链路MAC地址，那么触发相应的机制，来填充该路由信息。
+	// 比如：IPV4协议，如果没有目的IP对应的MAC信息，从从ARP缓存中查找信息，找到了直接返回，
+	// 若没找到，那么发送ARP请求，得到对应的MAC地址。
+	if route.IsResolutionRequired() {
+		waker := &sleep.Waker{}
+		log.Println("发起arp广播(如果目标是255.255.255.255)或者在本地arp缓存来寻找目标主机 目标路由为", to, route.RemoteAddress)
+		if ch, err := route.Resolve(waker); err != nil {
+			if err == tcpip.ErrWouldBlock {
+				// Link address needs to be resolved. Resolution was triggered the background.
+				// Better luck next time.
+				route.RemoveWaker(waker)
+				return 0, ch, tcpip.ErrNoLinkAddress
+			}
+			return 0, nil, err
+		}
+	}
+
+	// 得到要发送的数据内容
+	v, err := p.Get(p.Size())
+	if err != nil {
+		return 0, nil, err
+	}
+
+	ttl := route.DefaultTTL()
+	// 如果是多播地址，设置ttl
+	if header.IsV4MulticastAddress(route.RemoteAddress) || header.IsV6MulticastAddress(route.RemoteAddress) {
+		ttl = e.multicastTTL
+	}
+
+	// 增加UDP头部信息，并发送出去
+	if err := sendUDP(route, buffer.View(v).ToVectorisedView(), e.id.LocalPort, dstPort, ttl); err != nil {
+		return 0, nil, err
+	}
+
+	return uintptr(len(v)), nil, nil
 }
 
 func (e *endpoint) Peek([][]byte) (uintptr, tcpip.ControlMessages, *tcpip.Error) {
@@ -409,23 +611,183 @@ func (e *endpoint) Bind(addr tcpip.FullAddress, commit func() *tcpip.Error) *tcp
 }
 
 func (e *endpoint) GetLocalAddress() (tcpip.FullAddress, *tcpip.Error) {
-	return tcpip.FullAddress{}, nil
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	return tcpip.FullAddress{
+		NIC:  e.regNICID,
+		Addr: e.id.LocalAddress,
+		Port: e.id.LocalPort,
+	}, nil
 }
 
 func (e *endpoint) GetRemoteAddress() (tcpip.FullAddress, *tcpip.Error) {
-	return tcpip.FullAddress{}, nil
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if e.state != stateConnected {
+		return tcpip.FullAddress{}, tcpip.ErrNotConnected
+	}
+
+	return tcpip.FullAddress{
+		NIC:  e.regNICID,
+		Addr: e.id.RemoteAddress,
+		Port: e.id.RemotePort,
+	}, nil
 }
 
 func (e *endpoint) Readiness(mask waiter.EventMask) waiter.EventMask {
-	return waiter.EventErr
+	// The endpoint is always writable.
+	result := waiter.EventOut & mask
+
+	// Determine if the endpoint is readable if requested.
+	if (mask & waiter.EventIn) != 0 {
+		e.rcvMu.Lock()
+		if !e.rcvList.Empty() || e.rcvClosed {
+			result |= waiter.EventIn
+		}
+		e.rcvMu.Unlock()
+	}
+
+	return result
 }
 
 func (e *endpoint) SetSockOpt(opt interface{}) *tcpip.Error {
+	switch v := opt.(type) {
+	case tcpip.V6OnlyOption:
+		// We only recognize this option on v6 endpoints.
+		if e.netProto != header.IPv6ProtocolNumber {
+			return tcpip.ErrInvalidEndpointState
+		}
+
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
+		// We only allow this to be set when we're in the initial state.
+		if e.state != stateInitial {
+			return tcpip.ErrInvalidEndpointState
+		}
+
+		e.v6only = v != 0
+
+	case tcpip.TimestampOption:
+		e.rcvMu.Lock()
+		e.rcvTimestamp = v != 0
+		e.rcvMu.Unlock()
+
+	case tcpip.MulticastTTLOption:
+		e.mu.Lock()
+		e.multicastTTL = uint8(v)
+		e.mu.Unlock()
+
+	case tcpip.AddMembershipOption:
+		nicID := v.NIC
+		if v.InterfaceAddr != header.IPv4Any {
+			nicID = e.stack.CheckLocalAddress(nicID, e.netProto, v.InterfaceAddr)
+		}
+		if nicID == 0 {
+			return tcpip.ErrNoRoute
+		}
+
+		// TODO: check that v.MulticastAddr is a multicast address.
+		if err := e.stack.JoinGroup(e.netProto, nicID, v.MulticastAddr); err != nil {
+			return err
+		}
+
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
+		e.multicastMemberships = append(e.multicastMemberships, multicastMembership{nicID, v.MulticastAddr})
+
+	case tcpip.RemoveMembershipOption:
+		nicID := v.NIC
+		if v.InterfaceAddr != header.IPv4Any {
+			nicID = e.stack.CheckLocalAddress(nicID, e.netProto, v.InterfaceAddr)
+		}
+		if nicID == 0 {
+			return tcpip.ErrNoRoute
+		}
+
+		// TODO: check that v.MulticastAddr is a multicast address.
+		if err := e.stack.LeaveGroup(e.netProto, nicID, v.MulticastAddr); err != nil {
+			return err
+		}
+
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		for i, mem := range e.multicastMemberships {
+			if mem.nicID == nicID && mem.multicastAddr == v.MulticastAddr {
+				// Only remove the first match, so that each added membership above is
+				// paired with exactly 1 removal.
+				e.multicastMemberships[i] = e.multicastMemberships[len(e.multicastMemberships)-1]
+				e.multicastMemberships = e.multicastMemberships[:len(e.multicastMemberships)-1]
+				break
+			}
+		}
+	}
 	return nil
 }
 
 func (e *endpoint) GetSockOpt(opt interface{}) *tcpip.Error {
-	return nil
+	switch o := opt.(type) {
+	case tcpip.ErrorOption:
+		return nil
+
+	case *tcpip.SendBufferSizeOption:
+		e.mu.Lock()
+		*o = tcpip.SendBufferSizeOption(e.sndBufSize)
+		e.mu.Unlock()
+		return nil
+
+	case *tcpip.ReceiveBufferSizeOption:
+		e.rcvMu.Lock()
+		*o = tcpip.ReceiveBufferSizeOption(e.rcvBufSizeMax)
+		e.rcvMu.Unlock()
+		return nil
+
+	case *tcpip.V6OnlyOption:
+		// We only recognize this option on v6 endpoints.
+		if e.netProto != header.IPv6ProtocolNumber {
+			return tcpip.ErrUnknownProtocolOption
+		}
+
+		e.mu.Lock()
+		v := e.v6only
+		e.mu.Unlock()
+
+		*o = 0
+		if v {
+			*o = 1
+		}
+		return nil
+
+	case *tcpip.ReceiveQueueSizeOption:
+		e.rcvMu.Lock()
+		if e.rcvList.Empty() {
+			*o = 0
+		} else {
+			p := e.rcvList.Front()
+			*o = tcpip.ReceiveQueueSizeOption(p.data.Size())
+		}
+		e.rcvMu.Unlock()
+		return nil
+
+	case *tcpip.TimestampOption:
+		e.rcvMu.Lock()
+		*o = 0
+		if e.rcvTimestamp {
+			*o = 1
+		}
+		e.rcvMu.Unlock()
+
+	case *tcpip.MulticastTTLOption:
+		e.mu.Lock()
+		*o = tcpip.MulticastTTLOption(e.multicastTTL)
+		e.mu.Unlock()
+		return nil
+	}
+
+	return tcpip.ErrUnknownProtocolOption
 }
 
 // HandlePacket 从网络层接收到UDP数据报时的处理函数
@@ -482,7 +844,7 @@ func (e *endpoint) HandlePacket(r *stack.Route, id stack.TransportEndpointID, vv
 	}
 
 	e.rcvMu.Unlock()
-	// TODO 通知用户层可以读取数据了
+	// NOTE 通知用户层可以读取数据了
 	if wasEmpty {
 		e.waiterQueue.Notify(waiter.EventIn)
 	}

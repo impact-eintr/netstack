@@ -79,7 +79,7 @@ func (e *endpoint) HandlePacket(r *stack.Route, vv buffer.VectorisedView) {
 		// 倒置目标与源 作为回应
 		copy(pkt.ProtocolAddressSender(), h.ProtocolAddressTarget())
 		copy(pkt.ProtocolAddressTarget(), h.ProtocolAddressSender())
-		log.Println("处理注入的ARP请求 这里将返回一个ARP报文作为响应")
+		log.Println("处理注入的ARP请求 这里将返回一个ARP报文作为响应", tcpip.LinkAddress(pkt.HardwareAddressTarget()))
 		e.linkEP.WritePacket(r, hdr, buffer.VectorisedView{}, ProtocolNumber) // 往链路层写回消息
 		// 注意这里的 fallthrough 表示需要继续执行下面分支的代码
 		// 当收到 arp 请求需要添加到链路地址缓存中
@@ -87,7 +87,7 @@ func (e *endpoint) HandlePacket(r *stack.Route, vv buffer.VectorisedView) {
 	case header.ARPReply:
 		// 这里记录ip和mac对应关系，也就是arp表
 		addr := tcpip.Address(h.ProtocolAddressSender())
-		linkAddr := tcpip.LinkAddress(h.HardwareAddressSender())
+		linkAddr := tcpip.LinkAddress(h.HardwareAddressSender()) // 记录远端机的MAC地址
 		e.linkAddrCache.AddLinkAddress(e.nicid, addr, linkAddr)
 	default:
 		panic(tcpip.ErrUnknownProtocol)

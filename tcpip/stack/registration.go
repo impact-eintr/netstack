@@ -49,7 +49,7 @@ type LinkEndpoint interface {
 	IsAttached() bool
 }
 
-// LinkAddressResolver 是对可以解析链接地址的 NetworkProtocol 的扩展 TODO 需要解读
+// LinkAddressResolver 是对可以解析链接地址的 NetworkProtocol 的扩展 其实就是ARP
 type LinkAddressResolver interface {
 	LinkAddressRequest(addr, localAddr tcpip.Address, linkEP LinkEndpoint) *tcpip.Error
 

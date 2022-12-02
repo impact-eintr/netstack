@@ -38,7 +38,7 @@ type transportProtocolState struct {
 type Stack struct {
 	transportProtocols map[tcpip.TransportProtocolNumber]*transportProtocolState // 各种传输层协议
 	networkProtocols   map[tcpip.NetworkProtocolNumber]NetworkProtocol           // 各种网络层协议
-	linkAddrResolvers  map[tcpip.NetworkProtocolNumber]LinkAddressResolver       // 各种链接解析器
+	linkAddrResolvers  map[tcpip.NetworkProtocolNumber]LinkAddressResolver       // 支持链接层反向解析的网络层协议
 
 	demux *transportDemuxer // 传输层的复用器
 
@@ -103,6 +103,12 @@ func New(network []string, transport []string, opts Options) *Stack {
 		}
 		netProto := netProtoFactory()                    // 制造一个该型号协议的示实例
 		s.networkProtocols[netProto.Number()] = netProto // 注册该型号的网络协议
+		// 判断该协议是否支持链路层地址解析协议接口，如果支持添加到 s.linkAddrResolvers 中，
+		// 如：ARP协议会添加 IPV4-ARP 的对应关系
+		// 后面需要地址解析协议的时候会更改网络层协议号来找到相应的地址解析协议
+		if r, ok := netProto.(LinkAddressResolver); ok {
+			s.linkAddrResolvers[r.LinkAddressProtocol()] = r // 其实就是说： 声明arp支持地址解析
+		}
 	}
 
 	// 添加指定的传输层协议 必已经在init中注册过
@@ -335,6 +341,19 @@ func (s *Stack) ContainsSubnet(id tcpip.NICID, subnet tcpip.Subnet) (bool, *tcpi
 	return false, tcpip.ErrUnknownNICID
 }
 
+// RemoveAddress removes an existing network-layer address from the specified
+// NIC.
+func (s *Stack) RemoveAddress(id tcpip.NICID, addr tcpip.Address) *tcpip.Error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if nic, ok := s.nics[id]; ok {
+		return nic.RemoveAddress(addr)
+	}
+
+	return tcpip.ErrUnknownNICID
+}
+
 // FindRoute 路由查找实现，比如当tcp建立连接时，会用该函数得到路由信息
 func (s *Stack) FindRoute(id tcpip.NICID, localAddr, remoteAddr tcpip.Address,
 	netProto tcpip.NetworkProtocolNumber) (Route, *tcpip.Error) {
@@ -354,7 +373,7 @@ func (s *Stack) FindRoute(id tcpip.NICID, localAddr, remoteAddr tcpip.Address,
 
 		var ref *referencedNetworkEndpoint
 		if len(localAddr) != 0 {
-			ref = nic.findEndpoint(netProto, localAddr, CanBePrimaryEndpoint)
+			ref = nic.findEndpoint(netProto, localAddr, CanBePrimaryEndpoint) // 找到绑定LocalAddr的IP端
 		} else {
 			ref = nic.primaryEndpoint(netProto)
 		}
@@ -426,7 +445,7 @@ func (s *Stack) GetLinkAddress(nicid tcpip.NICID, addr, localAddr tcpip.Address,
 	}
 	s.mu.RUnlock()
 
-	fullAddr := tcpip.FullAddress{NIC: nicid, Addr: addr}
+	fullAddr := tcpip.FullAddress{NIC: nicid, Addr: addr} // addr 可能是Remote IP Address
 	// 根据网络层协议号找到对应的地址解析协议
 	linkRes := s.linkAddrResolvers[protocol]
 	return s.linkAddrCache.get(fullAddr, linkRes, localAddr, nic.linkEP, w)
@@ -496,4 +515,15 @@ func (s *Stack) TransportProtocolInstance(num tcpip.TransportProtocolNumber) Tra
 		return pState.proto
 	}
 	return nil
+}
+
+// JoinGroup joins the given multicast group on the given NIC.
+func (s *Stack) JoinGroup(protocol tcpip.NetworkProtocolNumber, nicID tcpip.NICID, multicastAddr tcpip.Address) *tcpip.Error {
+	// TODO: notify network of subscription via igmp protocol.
+	return s.AddAddressWithOptions(nicID, protocol, multicastAddr, NeverPrimaryEndpoint)
+}
+
+// LeaveGroup leaves the given multicast group on the given NIC.
+func (s *Stack) LeaveGroup(protocol tcpip.NetworkProtocolNumber, nicID tcpip.NICID, multicastAddr tcpip.Address) *tcpip.Error {
+	return s.RemoveAddress(nicID, multicastAddr)
 }

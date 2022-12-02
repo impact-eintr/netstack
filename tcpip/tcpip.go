@@ -355,6 +355,56 @@ type WriteOptions struct {
 	EndOfRecord bool
 }
 
+// ErrorOption is used in GetSockOpt to specify that the last error reported by
+// the endpoint should be cleared and returned.
+type ErrorOption struct{}
+
+// V6OnlyOption is used by SetSockOpt/GetSockOpt to specify whether an IPv6
+// socket is to be restricted to sending and receiving IPv6 packets only.
+type V6OnlyOption int
+
+// SendBufferSizeOption is used by SetSockOpt/GetSockOpt to specify the send
+// buffer size option.
+type SendBufferSizeOption int
+
+// ReceiveBufferSizeOption is used by SetSockOpt/GetSockOpt to specify the
+// receive buffer size option.
+type ReceiveBufferSizeOption int
+
+// SendQueueSizeOption is used in GetSockOpt to specify that the number of
+// unread bytes in the output buffer should be returned.
+type SendQueueSizeOption int
+
+// ReceiveQueueSizeOption is used in GetSockOpt to specify that the number of
+// unread bytes in the input buffer should be returned.
+type ReceiveQueueSizeOption int
+
+// TimestampOption is used by SetSockOpt/GetSockOpt to specify whether
+// SO_TIMESTAMP socket control messages are enabled.
+type TimestampOption int
+
+// MulticastTTLOption is used by SetSockOpt/GetSockOpt to control the default
+// TTL value for multicast messages. The default is 1.
+type MulticastTTLOption uint8
+
+// MembershipOption is used by SetSockOpt/GetSockOpt as an argument to
+// AddMembershipOption and RemoveMembershipOption.
+type MembershipOption struct {
+	NIC           NICID
+	InterfaceAddr Address
+	MulticastAddr Address
+}
+
+// RemoveMembershipOption is used by SetSockOpt/GetSockOpt to leave a multicast
+// group identified by the given multicast address, on the interface matching
+// the given interface address.
+type RemoveMembershipOption MembershipOption
+
+// AddMembershipOption is used by SetSockOpt/GetSockOpt to join a multicast
+// group identified by the given multicast address, on the interface matching
+// the given interface address.
+type AddMembershipOption MembershipOption
+
 type Route struct {
 	Destination Address     // 目标地址
 	Mask        AddressMask // 掩码

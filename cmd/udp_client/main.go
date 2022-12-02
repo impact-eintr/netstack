@@ -13,31 +13,28 @@ func main() {
 
 	log.SetFlags(log.Lshortfile | log.LstdFlags)
 
+	var err error
 	udpAddr, err := net.ResolveUDPAddr("udp", *addr)
 	if err != nil {
 		panic(err)
 	}
-	log.Println("解析地址")
 
 	// 建立UDP连接（只是填息了目的IP和端口，并未真正的建立连接）
 	conn, err := net.DialUDP("udp", nil, udpAddr)
 	if err != nil {
 		panic(err)
 	}
-	log.Println("TEST")
 
-	for i := 0; i < 3; i++ {
-		send := make([]byte, 2048)
-		if _, err := conn.Write(send); err != nil {
-			panic(err)
-		}
-		log.Printf("send: %s", string(send))
+	send := []byte("hello world")
+	if _, err := conn.Write(send); err != nil {
+		panic(err)
 	}
+	log.Printf("send: %s", string(send))
 
-	//recv := make([]byte, 10)
-	//rn, _, err := conn.ReadFrom(recv)
-	//if err != nil {
-	//	panic(err)
-	//}
-	//log.Printf("recv: %s", string(recv[:rn]))
+	recv := make([]byte, 32)
+	rn, _, err := conn.ReadFrom(recv)
+	if err != nil {
+		panic(err)
+	}
+	log.Printf("recv: %s", string(recv[:rn]))
 }

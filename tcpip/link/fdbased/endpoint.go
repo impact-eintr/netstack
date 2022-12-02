@@ -49,7 +49,7 @@ type Options struct {
 	TestLossPacket     func(data []byte) bool
 }
 
-// 根据选项参数创建一个链路层的endpoint，并返回该endpoint的id
+// New 根据选项参数创建一个链路层的endpoint，并返回该endpoint的id
 func New(opts *Options) tcpip.LinkEndpointID {
 	syscall.SetNonblock(opts.FD, true)
 	caps := stack.LinkEndpointCapabilities(0) // 初始化
@@ -203,7 +203,7 @@ func (e *endpoint) dispatch() (bool, *tcpip.Error) {
 
 	switch p {
 	case header.ARPProtocolNumber, header.IPv4ProtocolNumber:
-		log.Println("链路层收到报文")
+		log.Println("链路层收到报文,来自: ", remoteLinkAddr, localLinkAddr)
 		e.dispatcher.DeliverNetworkPacket(e, remoteLinkAddr, localLinkAddr, p, vv)
 	case header.IPv6ProtocolNumber:
 		// TODO ipv6暂时不感兴趣

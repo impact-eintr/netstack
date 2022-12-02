@@ -302,6 +302,23 @@ func (n *NIC) Subnets() []tcpip.Subnet {
 	return append(sns, n.subnets...)
 }
 
+// RemoveAddress removes an address from n.
+func (n *NIC) RemoveAddress(addr tcpip.Address) *tcpip.Error {
+	n.mu.Lock()
+	r := n.endpoints[NetworkEndpointID{addr}]
+	if r == nil || !r.holdsInsertRef {
+		n.mu.Unlock()
+		return tcpip.ErrBadLocalAddress
+	}
+
+	r.holdsInsertRef = false
+	n.mu.Unlock()
+
+	r.decRef()
+
+	return nil
+}
+
 // DeliverNetworkPacket 当 NIC 从物理接口接收数据包时，将调用函数 DeliverNetworkPacket，用来分发网络层数据包。
 // 比如 protocol 是 arp 协议号，那么会找到arp.HandlePacket来处理数据报。
 // 简单来说就是根据网络层协议和目的地址来找到相应的网络层端，将网络层数据发给它，
@@ -323,7 +340,7 @@ func (n *NIC) DeliverNetworkPacket(linkEP LinkEndpoint, remoteLinkAddr, localLin
 		return
 	}
 	src, dst := netProto.ParseAddresses(vv.First())
-	log.Printf("设备[%v]准备从 [%s] 向 [%s] 分发数据: %v\n", linkEP.LinkAddress(), src, dst, func() []byte {
+	log.Printf("网卡[%v]准备从 [%s] 向 [%s] 分发数据: %v\n", linkEP.LinkAddress(), src, dst, func() []byte {
 		if len(vv.ToView()) > 64 {
 			return vv.ToView()[:64]
 		}
@@ -334,6 +351,8 @@ func (n *NIC) DeliverNetworkPacket(linkEP LinkEndpoint, remoteLinkAddr, localLin
 	if ref := n.getRef(protocol, dst); ref != nil {
 		r := makeRoute(protocol, dst, src, linkEP.LinkAddress(), ref)
 		r.RemoteLinkAddress = remoteLinkAddr
+		log.Println("准备前往 IP 将本地和远端的MAC、IP 保存在路由中 以便协议栈使用",
+			r.LocalLinkAddress, r.RemoteLinkAddress, r.LocalAddress, r.RemoteAddress)
 		ref.ep.HandlePacket(&r, vv)
 		ref.decRef()
 		return
@@ -377,7 +396,7 @@ func (n *NIC) getRef(protocol tcpip.NetworkProtocolNumber, dst tcpip.Address) *r
 
 	n.mu.RLock()
 	if ref, ok := n.endpoints[id]; ok && ref.tryIncRef() {
-		log.Println("找到了目标网络层实现: ", id.LocalAddress)
+		log.Println("找到了目标网络端(绑定过的IP): ", id.LocalAddress)
 		n.mu.RUnlock()
 		return ref
 	}
@@ -434,7 +453,7 @@ func (n *NIC) DeliverTransportPacket(r *Route, protocol tcpip.TransportProtocolN
 		n.stack.stats.MalformedRcvdPackets.Increment()
 		return
 	}
-	log.Println("准备分发传输层数据报", n.stack.transportProtocols, srcPort, dstPort)
+	log.Println("网卡准备分发传输层数据报", n.stack.transportProtocols, srcPort, dstPort)
 	id := TransportEndpointID{dstPort, r.LocalAddress, srcPort, r.RemoteAddress}
 	// 调用分流器，根据传输层协议和传输层id分发数据报文
 	if n.demux.deliverPacket(r, protocol, vv, id) {
@@ -480,7 +499,6 @@ type referencedNetworkEndpoint struct {
 	// linkCache is set if link address resolution is enabled for this
 	// protocol. Set to nil otherwise.
 	linkCache LinkAddressCache
-	linkAddrCache
 
 	// holdsInsertRef is protected by the NIC's mutex. It indicates whether
 	// the reference count is biased by 1 due to the insertion of the

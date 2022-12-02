@@ -4,6 +4,7 @@ import (
 	"netstack/sleep"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
+	"netstack/tcpip/header"
 )
 
 // 贯穿整个协议栈的路由，也就是在链路层和网络层都可以路由
@@ -57,9 +58,46 @@ func (r *Route) Stats() tcpip.Stats {
 	return r.ref.nic.stack.Stats()
 }
 
+// PseudoHeaderChecksum forwards the call to the network endpoint's
+// implementation.
+// udp或tcp伪首部校验和的计算
+func (r *Route) PseudoHeaderChecksum(protocol tcpip.TransportProtocolNumber) uint16 {
+	return header.PseudoHeaderChecksum(protocol, r.LocalAddress, r.RemoteAddress)
+}
+
 // Capabilities returns the link-layer capabilities of the route.
 func (r *Route) Capabilities() LinkEndpointCapabilities {
 	return r.ref.ep.Capabilities()
+}
+
+// Resolve 如有必要，解决尝试解析链接地址的问题。如果地址解析需要阻塞，则返回ErrWouldBlock，
+// 例如等待ARP回复。地址解析完成（成功与否）时通知Waker。
+// 如果需要地址解析，则返回ErrNoLinkAddress和通知通道，以阻止顶级调用者。
+// 地址解析完成后，通道关闭（不管成功与否）。
+func (r *Route) Resolve(waker *sleep.Waker) (<-chan struct{}, *tcpip.Error) {
+	if !r.IsResolutionRequired() {
+		// Nothing to do if there is no cache (which does the resolution on cache miss) or
+		// link address is already known.
+		return nil, nil
+	}
+
+	nextAddr := r.NextHop
+	if nextAddr == "" {
+		// Local link address is already known.
+		if r.RemoteAddress == r.LocalAddress { // 发给自己
+			r.RemoteLinkAddress = r.LocalLinkAddress // MAC 就是自己
+			return nil, nil
+		}
+		nextAddr = r.RemoteAddress // 下一跳是远端机
+	}
+
+	// 调用地址解析协议来解析IP地址
+	linkAddr, ch, err := r.ref.linkCache.GetLinkAddress(r.ref.nic.ID(), nextAddr, r.LocalAddress, r.NetProto, waker)
+	if err != nil {
+		return ch, err
+	}
+	r.RemoteLinkAddress = linkAddr
+	return nil, nil
 }
 
 // RemoveWaker removes a waker that has been added in Resolve().

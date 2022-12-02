@@ -10,28 +10,42 @@ import (
 	"netstack/tcpip/link/tuntap"
 	"netstack/tcpip/network/arp"
 	"netstack/tcpip/network/ipv4"
+	"netstack/tcpip/network/ipv6"
 	"netstack/tcpip/stack"
 	"netstack/tcpip/transport/udp"
 	"netstack/waiter"
 	"os"
+	"os/signal"
+	"strconv"
 	"strings"
+	"syscall"
 )
+
+var mac = flag.String("mac", "aa:00:01:01:01:01", "mac address to use in tap device")
 
 func main() {
 	flag.Parse()
-	if len(flag.Args()) < 2 {
-		log.Fatal("Usage: ", os.Args[0], " <tap-device> <local-address/mask>")
+	if len(flag.Args()) != 4 {
+		log.Fatal("Usage: ", os.Args[0], " <tap-device> <local-address/mask> <ip-address> <local-port>")
 	}
 
 	log.SetFlags(log.Lshortfile | log.LstdFlags)
+
 	tapName := flag.Arg(0)
 	cidrName := flag.Arg(1)
+	addrName := flag.Arg(2)
+	portName := flag.Arg(3)
 
-	log.Printf("tap: %v, cidrName: %v", tapName, cidrName)
+	log.Printf("tap: %v, addr: %v, port: %v", tapName, addrName, portName)
 
-	parsedAddr, cidr, err := net.ParseCIDR(cidrName)
+	maddr, err := net.ParseMAC(*mac)
 	if err != nil {
-		log.Fatalf("Bad cidr: %v", cidrName)
+		log.Fatalf("Bad MAC address: %v", *mac)
+	}
+
+	parsedAddr := net.ParseIP(addrName)
+	if err != nil {
+		log.Fatalf("Bad addrress: %v", addrName)
 	}
 
 	// 解析地址ip地址，ipv4或者ipv6地址都支持
@@ -42,9 +56,14 @@ func main() {
 		proto = ipv4.ProtocolNumber
 	} else if parsedAddr.To16() != nil {
 		addr = tcpip.Address(parsedAddr.To16())
-		//proto = ipv6.ProtocolNumber
+		proto = ipv6.ProtocolNumber
 	} else {
 		log.Fatalf("Unknown IP type: %v", parsedAddr)
+	}
+
+	localPort, err := strconv.Atoi(portName)
+	if err != nil {
+		log.Fatalf("Unable to convert port %v: %v", portName, err)
 	}
 
 	// 虚拟网卡配置
@@ -61,22 +80,18 @@ func main() {
 	}
 
 	// 启动tap网卡
-	tuntap.SetLinkUp(tapName)
+	_ = tuntap.SetLinkUp(tapName)
 	// 设置路由
-	tuntap.SetRoute(tapName, cidr.String())
+	_ = tuntap.SetRoute(tapName, cidrName)
 
-	// 获取mac地址
-	mac, err := tuntap.GetHardwareAddr(tapName)
-	if err != nil {
-		panic(err)
-	}
-
-	// 抽象网卡的文件接口
+	// 抽象的文件接口
 	linkID := fdbased.New(&fdbased.Options{
-		FD:      fd,
-		MTU:     1500,
-		Address: tcpip.LinkAddress(mac),
+		FD:                 fd,
+		MTU:                1500,
+		Address:            tcpip.LinkAddress(maddr),
+		ResolutionRequired: true,
 	})
+
 	// 新建相关协议的协议栈
 	s := stack.New([]string{ipv4.ProtocolName, arp.ProtocolName},
 		[]string{ /*tcp.ProtocolName, */ udp.ProtocolName}, stack.Options{})
@@ -106,9 +121,9 @@ func main() {
 		},
 	})
 
-	go func() {
+	go func() { // echo server
 		// 监听udp localPort端口
-		conn := udpListen(s, proto, 9999)
+		conn := udpListen(s, proto, localPort)
 
 		for {
 			buf := make([]byte, 1024)
@@ -117,13 +132,17 @@ func main() {
 				log.Println(err)
 				break
 			}
-			log.Println("接收到数据", buf[:n])
+			log.Println("接收到数据", string(buf[:n]))
+			conn.Write([]byte("server echo"))
 		}
 		// 关闭监听服务，此时会释放端口
 		conn.Close()
 	}()
 
-	select {}
+	c := make(chan os.Signal)
+	signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGUSR1, syscall.SIGUSR2)
+	<-c
+
 	//conn, _ := net.Listen("tcp", "0.0.0.0:9999")
 	//rcv := &RCV{
 	//	Stack: s,
@@ -133,6 +152,7 @@ func main() {
 }
 
 type UdpConn struct {
+	raddr    tcpip.FullAddress
 	ep       tcpip.Endpoint
 	wq       *waiter.Queue
 	we       *waiter.Entry
@@ -147,7 +167,7 @@ func (conn *UdpConn) Read(rcv []byte) (int, error) {
 	conn.wq.EventRegister(conn.we, waiter.EventIn)
 	defer conn.wq.EventUnregister(conn.we)
 	for {
-		buf, _, err := conn.ep.Read(nil)
+		buf, _, err := conn.ep.Read(&conn.raddr)
 		if err != nil {
 			if err == tcpip.ErrWouldBlock {
 				<-conn.notifyCh
@@ -155,8 +175,19 @@ func (conn *UdpConn) Read(rcv []byte) (int, error) {
 			}
 			return 0, fmt.Errorf("%s", err.String())
 		}
-		rcv = append(rcv[:0], buf[:cap(rcv)]...)
-		return len(rcv), nil
+		n := len(buf)
+		if n > cap(rcv) {
+			n = cap(rcv)
+		}
+		rcv = append(rcv[:0], buf[:n]...)
+		return n, nil
+	}
+}
+
+func (conn *UdpConn) Write(snd []byte) {
+	_, _, err := conn.ep.Write(tcpip.SlicePayload(snd), tcpip.WriteOptions{To: &conn.raddr})
+	if err != nil {
+		log.Fatal(err)
 	}
 }
 
@@ -176,5 +207,9 @@ func udpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, localPort int)
 	}
 
 	waitEntry, notifyCh := waiter.NewChannelEntry(nil)
-	return &UdpConn{ep, &wq, &waitEntry, notifyCh}
+	return &UdpConn{
+		ep:       ep,
+		wq:       &wq,
+		we:       &waitEntry,
+		notifyCh: notifyCh}
 }
