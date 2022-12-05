@@ -1,7 +1,9 @@
 package tcp
 
 import (
+	"fmt"
 	"log"
+	"netstack/sleep"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/header"
@@ -34,6 +36,13 @@ type endpoint struct {
 
 	// TODO 需要添加
 
+	// rcvListMu can be taken after the endpoint mu below.
+	rcvListMu  sync.Mutex
+	rcvList    segmentList
+	rcvClosed  bool
+	rcvBufSize int
+	rcvBufUsed int
+
 	// The following fields are protected by the mutex.
 	mu                sync.RWMutex
 	id                stack.TransportEndpointID // tcp端在网络协议栈的唯一ID
@@ -56,6 +65,19 @@ type endpoint struct {
 	// workerRunning specifies if a worker goroutine is running.
 	workerRunning bool
 
+	segmentQueue segmentQueue
+
+	// When the send side is closed, the protocol goroutine is notified via
+	// sndCloseWaker, and sndClosed is set to true.
+	sndBufMu      sync.Mutex
+	sndBufSize    int
+	sndBufUsed    int
+	sndClosed     bool
+	sndBufInQueue seqnum.Size
+	sndQueue      segmentList
+	sndWaker      sleep.Waker
+	sndCloseWaker sleep.Waker
+
 	// acceptedChan is used by a listening endpoint protocol goroutine to
 	// send newly accepted connections to the endpoint so that they can be
 	// read by Accept() calls.
@@ -71,9 +93,12 @@ func newEndpoint(stack *stack.Stack, netProto tcpip.NetworkProtocolNumber, waite
 		stack:       stack,
 		netProto:    netProto,
 		waiterQueue: waiterQueue,
+		rcvBufSize:  DefaultBufferSize,
+		sndBufSize:  DefaultBufferSize,
 	}
 	// TODO 需要添加
 	log.Println("新建tcp端")
+	e.segmentQueue.setLimit(2 * e.rcvBufSize)
 	return e
 }
 
@@ -296,7 +321,6 @@ func (e *endpoint) GetSockOpt(opt interface{}) *tcpip.Error {
 }
 
 func (e *endpoint) HandlePacket(r *stack.Route, id stack.TransportEndpointID, vv buffer.VectorisedView) {
-	log.Println("接收到数据")
 	s := newSegment(r, id, vv)
 	// 解析tcp段，如果解析失败，丢弃该报文
 	if !s.parse() {
@@ -307,7 +331,20 @@ func (e *endpoint) HandlePacket(r *stack.Route, id stack.TransportEndpointID, vv
 	}
 
 	e.stack.Stats().TCP.ValidSegmentsReceived.Increment() // 有效报文喜加一
-	log.Println(s)
+	if (s.flags & flagRst) != 0 {                         // RST报文需要拒绝
+		e.stack.Stats().TCP.ResetsReceived.Increment()
+	}
+	// Send packet to worker goroutine.
+	if e.segmentQueue.enqueue(s) {
+		log.Printf("收到 tcp [%s] 报文片段 from %s, seq: %d, ack: %d",
+			flagString(s.flags), fmt.Sprintf("%s:%d", s.id.RemoteAddress, s.id.RemotePort),
+			s.sequenceNumber, s.ackNumber)
+		//e.newSegmentWaker.Assert()
+	} else {
+		// The queue is full, so we drop the segment.
+		e.stack.Stats().DroppedPackets.Increment()
+		s.decRef()
+	}
 }
 
 func (e *endpoint) HandleControlPacket(id stack.TransportEndpointID, typ stack.ControlType, extra uint32, vv buffer.VectorisedView) {

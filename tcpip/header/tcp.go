@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"netstack/tcpip"
+	"netstack/tcpip/seqnum"
 )
 
 /*
@@ -39,6 +40,10 @@ type TCPFields struct {
 	DstPort uint16
 
 	// SeqNum is the "sequence number" field of a TCP packet.
+	// TCP的初始序列号ISN是随机生成的
+	// 如果TCP每次连接都使用固定ISN，黑客可以很方便模拟任何IP与server建立连接
+	// 如果ISN是固定的，那很可能在新连接建立后，上次连接通信的报文才到达，
+	// 这种情况有概率发生老报文的seq号正好是server希望收到的新连接的报文seq。这就全乱了。
 	SeqNum uint32
 
 	// AckNum is the "acknowledgement number" field of a TCP packet.
@@ -71,6 +76,42 @@ const (
 	tcpChecksum = 16
 	urgentPtr   = 18
 )
+
+// Options that may be present in a TCP segment.
+const (
+	TCPOptionEOL           = 0
+	TCPOptionNOP           = 1
+	TCPOptionMSS           = 2
+	TCPOptionWS            = 3
+	TCPOptionTS            = 8
+	TCPOptionSACKPermitted = 4
+	TCPOptionSACK          = 5
+)
+
+// SACKBlock 表示 sack 块的结构体
+type SACKBlock struct {
+	// Start indicates the lowest sequence number in the block.
+	Start seqnum.Value
+
+	// End indicates the sequence number immediately following the last
+	// sequence number of this block.
+	End seqnum.Value
+}
+
+// TCPOptions tcp选项结构，这个结构不表示 syn/syn-ack 报文
+type TCPOptions struct {
+	// TS is true if the TimeStamp option is enabled.
+	TS bool
+
+	// TSVal is the value in the TSVal field of the segment.
+	TSVal uint32
+
+	// TSEcr is the value in the TSEcr field of the segment.
+	TSEcr uint32
+
+	// SACKBlocks are the SACK blocks specified in the segment.
+	SACKBlocks []SACKBlock
+}
 
 // TCP represents a TCP header stored in a byte array.
 type TCP []byte
@@ -163,6 +204,51 @@ func (b TCP) Options() []byte {
 	return b[TCPMinimumSize:b.DataOffset()]
 }
 
+// ParseTCPOptions extracts and stores all known options in the provided byte
+// slice in a TCPOptions structure.
+func ParseTCPOptions(b []byte) TCPOptions {
+	opts := TCPOptions{}
+	limit := len(b)
+	for i := 0; i < limit; {
+		switch b[i] {
+		case TCPOptionEOL: // 末尾
+			i = limit
+		case TCPOptionNOP: // 空值
+			i++
+		case TCPOptionTS: // 计时
+			if i+10 > limit || (b[i+1] != 10) {
+				return opts
+			}
+			opts.TS = true
+			opts.TSVal = binary.BigEndian.Uint32(b[i+2:])
+			opts.TSEcr = binary.BigEndian.Uint32(b[i+6:])
+			i += 10
+		case TCPOptionSACK:
+			if i+2 > limit {
+				// Malformed SACK block, just return and stop parsing.
+				return opts
+			}
+			sackOptionLen := int(b[i+1])
+			// TODO 需要添加
+
+			i += sackOptionLen
+		default:
+			// We don't recognize this option, just skip over it.
+			if i+2 > limit {
+				return opts
+			}
+			l := int(b[i+1])
+			// If the length is incorrect or if l+i overflows the
+			// total options length then return false.
+			if l < 2 || i+l > limit {
+				return opts
+			}
+			i++
+		}
+	}
+	return opts
+}
+
 /*
  0                   1                   2                   3
  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -191,9 +277,9 @@ var tcpFmt string = `
 |% 32s |
 |% 4s|% 4s|%06b|% 16s|
 |% 16s|% 16s|
-|      Options      |   Padding   |
-%v
-`
+|% 8v|
+|             Padding             |
+%v`
 
 func (b TCP) String() string {
 	return fmt.Sprintf(tcpFmt, atoi(b.SourcePort()), atoi(b.DestinationPort()),
@@ -201,5 +287,6 @@ func (b TCP) String() string {
 		atoi(b.AckNumber()),
 		atoi(b.DataOffset()), "0", b.Flags(), atoi(b.WindowSize()),
 		atoi(b.Checksum()), atoi(b.UrgentPtr()),
+		ParseTCPOptions(b.Options()),
 		b.viewPayload())
 }
