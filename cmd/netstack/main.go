@@ -124,7 +124,7 @@ func main() {
 
 	//go func() { // echo server
 	//	// 监听udp localPort端口
-	//	conn := udpListen(s, proto, localPort)
+	//	conn := udpListen(s, proto, addr, localPort)
 
 	//	for {
 	//		buf := make([]byte, 1024)
@@ -141,23 +141,48 @@ func main() {
 	//}()
 
 	go func() { // echo server
-		conn := tcpListen(s, proto, localPort)
-		conn.Read(nil)
+		listener := tcpListen(s, proto, addr, localPort)
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			conn.Read(nil)
+		}
 	}()
 
 	c := make(chan os.Signal)
 	signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGUSR1, syscall.SIGUSR2)
 	<-c
-
-	//conn, _ := net.Listen("tcp", "0.0.0.0:9999")
-	//rcv := &RCV{
-	//	Stack: s,
-	//	addr:  tcpip.FullAddress{},
-	//}
-	//TCPServer(conn, rcv)
 }
 
-func tcpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, localPort int) tcpip.Endpoint {
+type TcpConn struct {
+	raddr    tcpip.FullAddress
+	ep       tcpip.Endpoint
+	wq       *waiter.Queue
+	we       *waiter.Entry
+	notifyCh chan struct{}
+}
+
+// Accept 封装tcp的accept操作
+func (conn *TcpConn) Accept() (tcpip.Endpoint, error) {
+	conn.wq.EventRegister(conn.we, waiter.EventIn)
+	defer conn.wq.EventUnregister(conn.we)
+	for {
+		ep, _, err := conn.ep.Accept()
+		if err != nil {
+			if err == tcpip.ErrWouldBlock {
+				<-conn.notifyCh
+				continue
+			}
+			return nil, fmt.Errorf("%s", err.String())
+		}
+		return ep, nil
+	}
+}
+
+func tcpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Address, localPort int) *TcpConn {
 	var wq waiter.Queue
 	// 新建一个tcp端
 	ep, err := s.NewEndpoint(tcp.ProtocolNumber, proto, &wq)
@@ -167,7 +192,7 @@ func tcpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, localPort int)
 
 	// 绑定IP和端口，这里的IP地址为空，表示绑定任何IP
 	// 此时就会调用端口管理器
-	if err := ep.Bind(tcpip.FullAddress{NIC: 0, Addr: "", Port: uint16(localPort)}, nil); err != nil {
+	if err := ep.Bind(tcpip.FullAddress{NIC: 1, Addr: addr, Port: uint16(localPort)}, nil); err != nil {
 		log.Fatal("Bind failed: ", err)
 	}
 
@@ -176,7 +201,12 @@ func tcpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, localPort int)
 		log.Fatal("Listen failed: ", err)
 	}
 
-	return ep
+	waitEntry, notifyCh := waiter.NewChannelEntry(nil)
+	return &TcpConn{
+		ep:       ep,
+		wq:       &wq,
+		we:       &waitEntry,
+		notifyCh: notifyCh}
 }
 
 type UdpConn struct {
@@ -226,7 +256,7 @@ func (conn *UdpConn) Write(snd []byte) error {
 	}
 }
 
-func udpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, localPort int) *UdpConn {
+func udpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Address, localPort int) *UdpConn {
 	var wq waiter.Queue
 	// 新建一个udp端
 	ep, err := s.NewEndpoint(udp.ProtocolNumber, proto, &wq)
@@ -237,7 +267,7 @@ func udpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, localPort int)
 	// 绑定IP和端口，这里的IP地址为空，表示绑定任何IP
 	// 0.0.0.0:9999 这台机器上的所有ip的9999段端口数据都会使用该传输层实现
 	// 此时就会调用端口管理器
-	if err := ep.Bind(tcpip.FullAddress{NIC: 0, Addr: "", Port: uint16(localPort)}, nil); err != nil {
+	if err := ep.Bind(tcpip.FullAddress{NIC: 0, Addr: addr, Port: uint16(localPort)}, nil); err != nil {
 		log.Fatal("Bind failed: ", err)
 	}
 

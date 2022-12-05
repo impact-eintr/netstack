@@ -77,6 +77,16 @@ func (b UDP) Payload() []byte {
 	return b[UDPMinimumSize:]
 }
 
+// UDPViewSize UDP报文内容概览 长度
+const UDPViewSize = IPViewSize - UDPMinimumSize
+
+func (b UDP) viewPayload() []byte {
+	if b.Length()-UDPMinimumSize < UDPViewSize {
+		return b[UDPMinimumSize:]
+	}
+	return b[UDPMinimumSize:][:UDPViewSize]
+}
+
 // Checksum returns the "checksum" field of the udp header.
 func (b UDP) Checksum() uint16 {
 	return binary.BigEndian.Uint16(b[udpChecksum:])
@@ -125,14 +135,7 @@ var udpFmt string = `
 `
 
 func (b UDP) String() string {
-	for i := range b.Payload() {
-		if i != int(b.Length()-8-1) && b.Payload()[i]^b.Payload()[i+1] != 0 {
-			return fmt.Sprintf(udpFmt, atoi(b.SourcePort()), atoi(b.DestinationPort()),
-				atoi(b.Length()), atoi(b.Checksum()),
-				b.Payload())
-		}
-	}
 	return fmt.Sprintf(udpFmt, atoi(b.SourcePort()), atoi(b.DestinationPort()),
 		atoi(b.Length()), atoi(b.Checksum()),
-		fmt.Sprintf("%v x %d", b.Payload()[0], b.Length()-8))
+		b.viewPayload())
 }

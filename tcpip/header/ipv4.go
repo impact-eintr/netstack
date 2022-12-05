@@ -180,6 +180,16 @@ func (b IPv4) Payload() []byte {
 	return b[b.HeaderLength():][:b.PayloadLength()]
 }
 
+// IPViewSize IP报文内容概览 长度
+const IPViewSize = 128
+
+func (b IPv4) viewPayload() []byte {
+	if b.PayloadLength() < IPViewSize {
+		return b[b.HeaderLength():][:b.PayloadLength()]
+	}
+	return b[b.HeaderLength():][:IPViewSize]
+}
+
 // PayloadLength returns the length of the payload portion of the ipv4 packet.
 func (b IPv4) PayloadLength() uint16 {
 	return b.TotalLength() - uint16(b.HeaderLength())
@@ -294,20 +304,10 @@ func atoi[T int | int8 | int16 | int32 | int64 | uint | uint8 | uint16 | uint32]
 }
 
 func (b IPv4) String() string {
-	for i := range b.Payload() {
-		if i != int(b.PayloadLength()-1) && b.Payload()[i]^b.Payload()[i+1] != 0 {
-			return fmt.Sprintf(ipv4Fmt, atoi(IPVersion(b)), atoi(b.HeaderLength()), atoi(0), atoi(b.TotalLength()),
-				atoi(b.ID()), atoi(b.Flags()>>2), atoi((b.Flags()&2)>>1), atoi(b.Flags()&1), atoi(b.FragmentOffset()),
-				atoi(b.TTL()), atoi(b.Protocol()), atoi(b.Checksum()),
-				b.SourceAddress().String(),
-				b.DestinationAddress().String(),
-				b.Payload())
-		}
-	}
 	return fmt.Sprintf(ipv4Fmt, atoi(IPVersion(b)), atoi(b.HeaderLength()), atoi(0), atoi(b.TotalLength()),
 		atoi(b.ID()), atoi(b.Flags()>>2), atoi((b.Flags()&2)>>1), atoi(b.Flags()&1), atoi(b.FragmentOffset()),
 		atoi(b.TTL()), atoi(b.Protocol()), atoi(b.Checksum()),
 		b.SourceAddress().String(),
 		b.DestinationAddress().String(),
-		fmt.Sprintf("%v x %d", b.Payload()[0], b.PayloadLength()))
+		b.viewPayload())
 }

@@ -121,7 +121,7 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable, payload b
 // 收到ip包的处理
 func (e *endpoint) HandlePacket(r *stack.Route, vv buffer.VectorisedView) {
 	// 得到ip报文
-	h := header.IPv4(vv.ToView())
+	h := header.IPv4(vv.First())
 	// 检查报文是否有效
 	if !h.IsValid(vv.Size()) {
 		return
