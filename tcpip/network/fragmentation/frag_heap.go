@@ -17,6 +17,7 @@ package fragmentation
 import (
 	"container/heap"
 	"fmt"
+	"log"
 
 	"netstack/tcpip/buffer"
 )
@@ -58,6 +59,7 @@ func (h *fragHeap) reassemble() (buffer.VectorisedView, error) {
 	curr := heap.Pop(h).(fragment)
 	views := curr.vv.Views()
 	size := curr.vv.Size()
+	log.Println(size)
 
 	if curr.offset != 0 {
 		return buffer.VectorisedView{}, fmt.Errorf("offset of the first packet is != 0 (%d)", curr.offset)
@@ -66,10 +68,11 @@ func (h *fragHeap) reassemble() (buffer.VectorisedView, error) {
 	for h.Len() > 0 {
 		curr := heap.Pop(h).(fragment)
 		if int(curr.offset) < size {
-			curr.vv.TrimFront(size - int(curr.offset))
+			curr.vv.TrimFront(size - int(curr.offset)) // 截取重复的部分
 		} else if int(curr.offset) > size {
 			return buffer.VectorisedView{}, fmt.Errorf("packet has a hole, expected offset %d, got %d", size, curr.offset)
 		}
+		// curr.offset == size 没有空洞 紧密排布
 		size += curr.vv.Size()
 		views = append(views, curr.vv.Views()...)
 	}

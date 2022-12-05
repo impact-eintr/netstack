@@ -95,7 +95,7 @@ func main() {
 
 	// 新建相关协议的协议栈
 	s := stack.New([]string{ipv4.ProtocolName, arp.ProtocolName},
-		[]string{ /*tcp.ProtocolName, */ udp.ProtocolName}, stack.Options{})
+		[]string{tcp.ProtocolName, udp.ProtocolName}, stack.Options{})
 
 	// 新建抽象的网卡
 	if err := s.CreateNamedNIC(1, "vnic1", linkID); err != nil {
@@ -122,22 +122,27 @@ func main() {
 		},
 	})
 
-	go func() { // echo server
-		// 监听udp localPort端口
-		conn := udpListen(s, proto, localPort)
+	//go func() { // echo server
+	//	// 监听udp localPort端口
+	//	conn := udpListen(s, proto, localPort)
 
-		for {
-			buf := make([]byte, 1024)
-			n, err := conn.Read(buf)
-			if err != nil {
-				log.Println(err)
-				break
-			}
-			log.Println("接收到数据", string(buf[:n]))
-			conn.Write([]byte("server echo"))
-		}
-		// 关闭监听服务，此时会释放端口
-		conn.Close()
+	//	for {
+	//		buf := make([]byte, 1024)
+	//		n, err := conn.Read(buf)
+	//		if err != nil {
+	//			log.Println(err)
+	//			break
+	//		}
+	//		log.Println("接收到数据", string(buf[:n]))
+	//		conn.Write([]byte("server echo"))
+	//	}
+	//	// 关闭监听服务，此时会释放端口
+	//	conn.Close()
+	//}()
+
+	go func() { // echo server
+		conn := tcpListen(s, proto, localPort)
+		conn.Read(nil)
 	}()
 
 	c := make(chan os.Signal)
@@ -162,7 +167,7 @@ func tcpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, localPort int)
 
 	// 绑定IP和端口，这里的IP地址为空，表示绑定任何IP
 	// 此时就会调用端口管理器
-	if err := ep.Bind(tcpip.FullAddress{0, "", uint16(localPort)}, nil); err != nil {
+	if err := ep.Bind(tcpip.FullAddress{NIC: 0, Addr: "", Port: uint16(localPort)}, nil); err != nil {
 		log.Fatal("Bind failed: ", err)
 	}
 

@@ -25,7 +25,8 @@ func main() {
 		panic(err)
 	}
 
-	send := []byte("hello world")
+	//send := []byte("hello world")
+	send := make([]byte, 1600)
 	if _, err := conn.Write(send); err != nil {
 		panic(err)
 	}
