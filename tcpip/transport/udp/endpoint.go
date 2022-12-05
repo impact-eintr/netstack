@@ -121,7 +121,7 @@ func NewConnectedEndpoint(stack *stack.Stack, r *stack.Route, id stack.Transport
 func (e *endpoint) Close() {
 	e.mu.Lock()
 
-	e.shutdownFlags = tcpip.ShutdownRead | tcpip.ShutdownWrite
+	e.shutdownFlags = tcpip.ShutdownRead | tcpip.ShutdownWrite // 关闭读写
 
 	switch e.state {
 	case stateBound, stateConnected:
@@ -255,6 +255,7 @@ func (e *endpoint) prepareForWrite(to *tcpip.FullAddress) (retry bool, err *tcpi
 	}
 
 	// The state is still 'initial', so try to bind the endpoint.
+	// 随机绑定一个端口
 	if err := e.bindLocked(tcpip.FullAddress{}, nil); err != nil {
 		return false, err
 	}
@@ -282,6 +283,19 @@ func (e *endpoint) Write(p tcpip.Payload, opts tcpip.WriteOptions) (uintptr, <-c
 	// 如果设置了关闭写数据，那返回错误
 	if e.shutdownFlags&tcpip.ShutdownWrite != 0 {
 		return 0, nil, tcpip.ErrClosedForSend
+	}
+
+	// Prepare for write.
+	// 准备发送数据
+	for {
+		retry, err := e.prepareForWrite(to)
+		if err != nil {
+			return 0, nil, err
+		}
+
+		if !retry {
+			break
+		}
 	}
 
 	var route *stack.Route
@@ -501,15 +515,37 @@ func (e *endpoint) Connect(addr tcpip.FullAddress) *tcpip.Error {
 }
 
 func (e *endpoint) Shutdown(flags tcpip.ShutdownFlags) *tcpip.Error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// A socket in the bound state can still receive multicast messages,
+	// so we need to notify waiters on shutdown.
+	if e.state != stateBound && e.state != stateConnected {
+		return tcpip.ErrNotConnected
+	}
+
+	e.shutdownFlags |= flags
+
+	if flags&tcpip.ShutdownRead != 0 {
+		e.rcvMu.Lock()
+		wasClosed := e.rcvClosed
+		e.rcvClosed = true
+		e.rcvMu.Unlock()
+
+		if !wasClosed {
+			e.waiterQueue.Notify(waiter.EventIn)
+		}
+	}
+
 	return nil
 }
 
 func (e *endpoint) Listen(backlog int) *tcpip.Error {
-	return nil
+	return tcpip.ErrNotSupported
 }
 
 func (e *endpoint) Accept() (tcpip.Endpoint, *waiter.Queue, *tcpip.Error) {
-	return nil, nil, nil
+	return nil, nil, tcpip.ErrNotSupported
 }
 
 func (e *endpoint) registerWithStack(nicid tcpip.NICID, netProtos []tcpip.NetworkProtocolNumber,

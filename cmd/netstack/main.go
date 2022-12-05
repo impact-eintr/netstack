@@ -12,6 +12,7 @@ import (
 	"netstack/tcpip/network/ipv4"
 	"netstack/tcpip/network/ipv6"
 	"netstack/tcpip/stack"
+	"netstack/tcpip/transport/tcp"
 	"netstack/tcpip/transport/udp"
 	"netstack/waiter"
 	"os"
@@ -149,6 +150,28 @@ func main() {
 	//	addr:  tcpip.FullAddress{},
 	//}
 	//TCPServer(conn, rcv)
+}
+
+func tcpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, localPort int) tcpip.Endpoint {
+	var wq waiter.Queue
+	// 新建一个tcp端
+	ep, err := s.NewEndpoint(tcp.ProtocolNumber, proto, &wq)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// 绑定IP和端口，这里的IP地址为空，表示绑定任何IP
+	// 此时就会调用端口管理器
+	if err := ep.Bind(tcpip.FullAddress{0, "", uint16(localPort)}, nil); err != nil {
+		log.Fatal("Bind failed: ", err)
+	}
+
+	// 开始监听
+	if err := ep.Listen(10); err != nil {
+		log.Fatal("Listen failed: ", err)
+	}
+
+	return ep
 }
 
 type UdpConn struct {

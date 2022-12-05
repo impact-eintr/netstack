@@ -13,8 +13,7 @@ import (
 
 const (
 	// ageLimit is set to the same cache stale time used in Linux.
-	//ageLimit = 1 * time.Minute
-	ageLimit = 5 * time.Second
+	ageLimit = 1 * time.Minute
 	// resolutionTimeout is set to the same ARP timeout used in Linux.
 	resolutionTimeout = 1 * time.Second
 	// resolutionAttempts is set to the same ARP retries used in Linux.
@@ -486,14 +485,14 @@ func (s *Stack) RegisterTransportEndpoint(nicID tcpip.NICID, netProtos []tcpip.N
 func (s *Stack) UnregisterTransportEndpoint(nicID tcpip.NICID, netProtos []tcpip.NetworkProtocolNumber,
 	protocol tcpip.TransportProtocolNumber, id TransportEndpointID) {
 	if nicID == 0 {
-		s.demux.unregisterEndpoint(netProtos, protocol, id)
+		s.demux.unregisterEndpoint(netProtos, protocol, id) // 释放协议栈中的传输端
 		return
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	nic := s.nics[nicID]
 	if nic != nil {
-		nic.demux.unregisterEndpoint(netProtos, protocol, id)
+		nic.demux.unregisterEndpoint(netProtos, protocol, id) //释放该网卡中的传输端
 	}
 
 }
