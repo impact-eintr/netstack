@@ -211,10 +211,11 @@ func (s *Sleeper) nextWaker(block bool) *Waker {
 // the waker; when 'ok' is false, 'id' is undefined.
 //
 // N.B. This method is *not* thread-safe. Only one goroutine at a time is
-//      allowed to call this method.
+//
+//	allowed to call this method.
 func (s *Sleeper) Fetch(block bool) (id int, ok bool) {
 	for {
-		w := s.nextWaker(block)
+		w := s.nextWaker(block) // 如果没有 将暂停调度 call gopark
 		if w == nil {
 			return -1, false
 		}
@@ -357,7 +358,7 @@ func (w *Waker) Assert() {
 	case nil:
 	case &assertedSleeper:
 	default:
-		s.enqueueAssertedWaker(w)
+		s.enqueueAssertedWaker(w) // call goready
 	}
 }
 

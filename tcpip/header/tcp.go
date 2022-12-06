@@ -65,6 +65,31 @@ type TCPFields struct {
 	UrgentPointer uint16
 }
 
+// TCPSynOptions is used to return the parsed TCP Options in a syn
+// segment.
+// syn 报文的选项
+type TCPSynOptions struct {
+	// MSS is the maximum segment size provided by the peer in the SYN.
+	MSS uint16
+
+	// WS is the window scale option provided by the peer in the SYN.
+	//
+	// Set to -1 if no window scale option was provided.
+	WS int
+
+	// TS is true if the timestamp option was provided in the syn/syn-ack.
+	TS bool
+
+	// TSVal is the value of the TSVal field in the timestamp option.
+	TSVal uint32
+
+	// TSEcr is the value of the TSEcr field in the timestamp option.
+	TSEcr uint32
+
+	// SACKPermitted is true if the SACK option was provided in the SYN/SYN-ACK.
+	SACKPermitted bool
+}
+
 const (
 	srcPort     = 0
 	dstPort     = 2
@@ -79,13 +104,30 @@ const (
 
 // Options that may be present in a TCP segment.
 const (
-	TCPOptionEOL           = 0
-	TCPOptionNOP           = 1
-	TCPOptionMSS           = 2
-	TCPOptionWS            = 3
-	TCPOptionTS            = 8
+	// 选项表结束选项
+	TCPOptionEOL = 0
+	// 空操作（nop）选项
+	TCPOptionNOP = 1
+	// 最大报文段长度选项
+	TCPOptionMSS = 2
+	// 窗口扩大因子选项
+	TCPOptionWS = 3
+	// 时间戳选项
+	TCPOptionTS = 8
+	// 选择性确认（Selective Acknowledgment，SACK）选项
 	TCPOptionSACKPermitted = 4
-	TCPOptionSACK          = 5
+	// SACK 实际工作的选项
+	TCPOptionSACK = 5
+)
+
+const (
+	// MaxWndScale is maximum allowed window scaling, as described in
+	// RFC 1323, section 2.3, page 11.
+	MaxWndScale = 14
+
+	// TCPMaxSACKBlocks is the maximum number of SACK blocks that can
+	// be encoded in a TCP option field.
+	TCPMaxSACKBlocks = 4
 )
 
 // SACKBlock 表示 sack 块的结构体
@@ -97,6 +139,13 @@ type SACKBlock struct {
 	// sequence number of this block.
 	End seqnum.Value
 }
+
+/*
+  1byte    1byte        nbytes
++--------+--------+------------------+
+| Kind   | Length |       Info       |
++--------+--------+------------------+
+*/
 
 // TCPOptions tcp选项结构，这个结构不表示 syn/syn-ack 报文
 type TCPOptions struct {
@@ -111,6 +160,19 @@ type TCPOptions struct {
 
 	// SACKBlocks are the SACK blocks specified in the segment.
 	SACKBlocks []SACKBlock
+
+	// 以下仅供测试之用 不对外暴露
+
+	// MSS is the maximum segment size provided by the peer in the SYN.
+	mss uint16
+
+	// WS is the window scale option provided by the peer in the SYN.
+	//
+	// Set to -1 if no window scale option was provided.
+	ws int
+
+	// SACKPermitted is true if the SACK option was provided in the SYN/SYN-ACK.
+	sackPermitted bool
 }
 
 // TCP represents a TCP header stored in a byte array.
@@ -215,6 +277,26 @@ func ParseTCPOptions(b []byte) TCPOptions {
 			i = limit
 		case TCPOptionNOP: // 空值
 			i++
+		case TCPOptionMSS:
+			if i+4 > limit || b[i+1] != 4 {
+				return opts
+			}
+			mss := uint16(b[i+2])<<8 | uint16(b[i+3])
+			if mss == 0 {
+				return opts
+			}
+			opts.mss = mss
+			i += 4
+		case TCPOptionWS:
+			if i+3 > limit || b[i+1] != 3 {
+				return opts
+			}
+			ws := int(b[i+2])
+			if ws > MaxWndScale {
+				ws = MaxWndScale
+			}
+			opts.ws = ws
+			i += 3
 		case TCPOptionTS: // 计时
 			if i+10 > limit || (b[i+1] != 10) {
 				return opts
@@ -223,17 +305,32 @@ func ParseTCPOptions(b []byte) TCPOptions {
 			opts.TSVal = binary.BigEndian.Uint32(b[i+2:])
 			opts.TSEcr = binary.BigEndian.Uint32(b[i+6:])
 			i += 10
+		case TCPOptionSACKPermitted:
+			if i+2 > limit || b[i+1] != 2 {
+				return opts
+			}
+			opts.sackPermitted = true
+			i += 2
 		case TCPOptionSACK:
 			if i+2 > limit {
 				// Malformed SACK block, just return and stop parsing.
 				return opts
 			}
 			sackOptionLen := int(b[i+1])
-			// TODO 需要添加
+			numBlocks := (sackOptionLen - 2) / 8 // 去头 每个block长为8
+			opts.SACKBlocks = []SACKBlock{}
+			for j := 0; j < numBlocks; j++ {
+				start := binary.BigEndian.Uint32(b[i+2+j*8:])
+				end := binary.BigEndian.Uint32(b[i+2+j*8+4:])
+				opts.SACKBlocks = append(opts.SACKBlocks, SACKBlock{
+					Start: seqnum.Value(start),
+					End:   seqnum.Value(end),
+				})
+			}
 
 			i += sackOptionLen
 		default:
-			// We don't recognize this option, just skip over it.
+			// 这里不做进一步解析 留到后面进行
 			if i+2 > limit {
 				return opts
 			}
@@ -243,10 +340,96 @@ func ParseTCPOptions(b []byte) TCPOptions {
 			if l < 2 || i+l > limit {
 				return opts
 			}
-			i++
+			i += l
 		}
 	}
+
 	return opts
+}
+
+func (opts TCPOptions) String() string {
+	return fmt.Sprintf("|MSS|% 29d|\n|WS |% 29d|\n|TS |% 29v|\n|TSV|% 29d|\n|TSE|% 29d|\n|SP |% 29v|\n|SBS|%v|",
+		opts.mss, opts.ws, opts.TS, opts.TSVal, opts.TSEcr, opts.sackPermitted, opts.SACKBlocks)
+}
+
+// ParseSynOptions parses the options received in a SYN segment and returns the
+// relevant ones. opts should point to the option part of the TCP Header.
+func ParseSynOptions(opts []byte, isAck bool) TCPSynOptions {
+	synOpts := TCPSynOptions{
+		// Per RFC 1122, page 85: "If an MSS option is not received at
+		// connection setup, TCP MUST assume a default send MSS of 536."
+		MSS: 536,
+		// If no window scale option is specified, WS in options is
+		// returned as -1; this is because the absence of the option
+		// indicates that the we cannot use window scaling on the
+		// receive end either.
+		WS: -1,
+	}
+
+	limit := len(opts)
+	for i := 0; i < limit; {
+		switch opts[i] {
+		case TCPOptionEOL:
+			i = limit
+		case TCPOptionNOP:
+			i++
+		case TCPOptionMSS:
+			if i+4 > limit || opts[i+1] != 4 {
+				return synOpts
+			}
+			mss := uint16(opts[i+2])<<8 | uint16(opts[i+3])
+			if mss == 0 {
+				return synOpts
+			}
+			synOpts.MSS = mss
+			i += 4
+		case TCPOptionWS:
+			if i+3 > limit || opts[i+1] != 3 {
+				return synOpts
+			}
+			ws := int(opts[i+2])
+			if ws > MaxWndScale {
+				ws = MaxWndScale
+			}
+			synOpts.WS = ws
+			i += 3
+		case TCPOptionTS:
+			if i+10 > limit || opts[i+1] != 10 {
+				return synOpts
+			}
+			synOpts.TSVal = binary.BigEndian.Uint32(opts[i+2:])
+			if isAck { // ACK报文需要记录时间间隔
+				// If the segment is a SYN-ACK then store the Timestamp Echo Reply
+				// in the segment.
+				synOpts.TSEcr = binary.BigEndian.Uint32(opts[i+6:])
+			}
+			synOpts.TS = true
+			i += 10
+		case TCPOptionSACKPermitted:
+			if i+2 > limit || opts[i+1] != 2 {
+				return synOpts
+			}
+			synOpts.SACKPermitted = true
+			i += 2
+		default:
+			// We don't recognize this option, just skip over it.
+			if i+2 > limit {
+				return synOpts
+			}
+			l := int(opts[i+1])
+			// If the length is incorrect or if l+i overflows the
+			// total options length then return false.
+			if l < 2 || i+l > limit {
+				return synOpts
+			}
+			i += l
+		}
+	}
+	return synOpts
+}
+
+func (opts TCPSynOptions) String() string {
+	return fmt.Sprintf("|%d|%d|%v|%d|%d|%v|", opts.MSS, opts.WS, opts.TS, opts.TSVal, opts.TSEcr, opts.SACKPermitted)
 }
 
 /*
@@ -277,16 +460,12 @@ var tcpFmt string = `
 |% 32s |
 |% 4s|% 4s|%06b|% 16s|
 |% 16s|% 16s|
-|% 8v|
-|             Padding             |
-%v`
+ ---------------------------------`
 
 func (b TCP) String() string {
 	return fmt.Sprintf(tcpFmt, atoi(b.SourcePort()), atoi(b.DestinationPort()),
 		atoi(b.SequenceNumber()),
 		atoi(b.AckNumber()),
 		atoi(b.DataOffset()), "0", b.Flags(), atoi(b.WindowSize()),
-		atoi(b.Checksum()), atoi(b.UrgentPtr()),
-		ParseTCPOptions(b.Options()),
-		b.viewPayload())
+		atoi(b.Checksum()), atoi(b.UrgentPtr()))
 }

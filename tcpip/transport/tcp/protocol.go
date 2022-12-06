@@ -24,6 +24,10 @@ const (
 	maxBufferSize = 4 << 20 // 4MB
 )
 
+// SACKEnabled option can be used to enable SACK support in the TCP
+// protocol. See: https://tools.ietf.org/html/rfc2018.
+type SACKEnabled bool
+
 type protocol struct{}
 
 // Number returns the tcp protocol number.

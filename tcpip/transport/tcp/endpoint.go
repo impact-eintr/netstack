@@ -65,6 +65,20 @@ type endpoint struct {
 	// workerRunning specifies if a worker goroutine is running.
 	workerRunning bool
 
+	// sendTSOk is used to indicate when the TS Option has been negotiated.
+	// When sendTSOk is true every non-RST segment should carry a TS as per
+	// RFC7323#section-1.1
+	sendTSOk bool
+
+	// recentTS is the timestamp that should be sent in the TSEcr field of
+	// the timestamp for future segments sent by the endpoint. This field is
+	// updated if required when a new segment is received by this endpoint.
+	recentTS uint32
+
+	// sackPermitted is set to true if the peer sends the TCPSACKPermitted
+	// option in the SYN/SYN-ACK.
+	sackPermitted bool
+
 	segmentQueue segmentQueue
 
 	// When the send side is closed, the protocol goroutine is notified via
@@ -78,10 +92,24 @@ type endpoint struct {
 	sndWaker      sleep.Waker
 	sndCloseWaker sleep.Waker
 
+	// notificationWaker is used to indicate to the protocol goroutine that
+	// it needs to wake up and check for notifications.
+	notificationWaker sleep.Waker
+
+	// newSegmentWaker is used to indicate to the protocol goroutine that
+	// it needs to wake up and handle new segments queued to it.
+	// HandlePacket收到segment后通知处理的事件驱动器
+	newSegmentWaker sleep.Waker
+
 	// acceptedChan is used by a listening endpoint protocol goroutine to
 	// send newly accepted connections to the endpoint so that they can be
 	// read by Accept() calls.
 	acceptedChan chan *endpoint
+
+	// The following are only used from the protocol goroutine, and
+	// therefore don't need locks to protect them.
+	rcv *receiver
+	snd *sender
 
 	// The following are only used to assist the restore run to re-connect.
 	bindAddress       tcpip.Address
@@ -97,7 +125,6 @@ func newEndpoint(stack *stack.Stack, netProto tcpip.NetworkProtocolNumber, waite
 		sndBufSize:  DefaultBufferSize,
 	}
 	// TODO 需要添加
-	log.Println("新建tcp端")
 	e.segmentQueue.setLimit(2 * e.rcvBufSize)
 	return e
 }
@@ -339,7 +366,7 @@ func (e *endpoint) HandlePacket(r *stack.Route, id stack.TransportEndpointID, vv
 		log.Printf("收到 tcp [%s] 报文片段 from %s, seq: %d, ack: %d",
 			flagString(s.flags), fmt.Sprintf("%s:%d", s.id.RemoteAddress, s.id.RemotePort),
 			s.sequenceNumber, s.ackNumber)
-		//e.newSegmentWaker.Assert()
+		e.newSegmentWaker.Assert()
 	} else {
 		// The queue is full, so we drop the segment.
 		e.stack.Stats().DroppedPackets.Increment()
@@ -349,4 +376,28 @@ func (e *endpoint) HandlePacket(r *stack.Route, id stack.TransportEndpointID, vv
 
 func (e *endpoint) HandleControlPacket(id stack.TransportEndpointID, typ stack.ControlType, extra uint32, vv buffer.VectorisedView) {
 
+}
+
+// maybeEnableTimestamp marks the timestamp option enabled for this endpoint if
+// the SYN options indicate that timestamp option was negotiated. It also
+// initializes the recentTS with the value provided in synOpts.TSval.
+func (e *endpoint) maybeEnableTimestamp(synOpts *header.TCPSynOptions) {
+	if synOpts.TS {
+		e.sendTSOk = true
+		e.recentTS = synOpts.TSVal
+	}
+}
+
+// maybeEnableSACKPermitted marks the SACKPermitted option enabled for this endpoint
+// if the SYN options indicate that the SACK option was negotiated and the TCP
+// stack is configured to enable TCP SACK option.
+func (e *endpoint) maybeEnableSACKPermitted(synOpts *header.TCPSynOptions) {
+	var v SACKEnabled
+	if err := e.stack.TransportProtocolOption(ProtocolNumber, &v); err != nil {
+		// Stack doesn't support SACK. So just return.
+		return
+	}
+	if bool(v) && synOpts.SACKPermitted {
+		e.sackPermitted = true
+	}
 }

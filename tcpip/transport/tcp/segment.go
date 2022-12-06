@@ -1,6 +1,7 @@
 package tcp
 
 import (
+	"fmt"
 	"log"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/header"
@@ -48,7 +49,7 @@ func flagString(flags uint8) string {
 // segment 表示一个 TCP 段。它保存有效负载和解析的 TCP 段信息，并且可以添加到侵入列表中
 type segment struct {
 	segmentEntry
-	refCnt int32
+	refCnt int32 // 引用计数
 	id     stack.TransportEndpointID
 	route  stack.Route
 	data   buffer.VectorisedView
@@ -72,6 +73,36 @@ func newSegment(r *stack.Route, id stack.TransportEndpointID, vv buffer.Vectoris
 	return s
 }
 
+func newSegmentFromView(r *stack.Route, id stack.TransportEndpointID, v buffer.View) *segment {
+	s := &segment{
+		refCnt: 1,
+		id:     id,
+		route:  r.Clone(),
+	}
+	s.views[0] = v
+	s.data = buffer.NewVectorisedView(len(v), s.views[:1]) // TODO 为什么只复制1?
+	return s
+}
+
+func (s *segment) clone() *segment {
+	t := &segment{
+		refCnt:         1,
+		id:             s.id,
+		sequenceNumber: s.sequenceNumber,
+		ackNumber:      s.ackNumber,
+		flags:          s.flags,
+		window:         s.window,
+		route:          s.route.Clone(),
+		viewToDeliver:  s.viewToDeliver,
+	}
+	t.data = s.data.Clone(t.views[:])
+	return t
+}
+
+func (s *segment) flagIsSet(flag uint8) bool {
+	return (s.flags & flag) != 0
+}
+
 func (s *segment) decRef() {
 	if atomic.AddInt32(&s.refCnt, -1) == 0 {
 		s.route.Release()
@@ -83,14 +114,17 @@ func (s *segment) incRef() {
 }
 
 func (s *segment) parse() bool {
-	log.Println(header.TCP(s.data.First()))
 	h := header.TCP(s.data.First())
 	offset := int(h.DataOffset())
 	if offset < header.TCPMinimumSize || offset > len(h) {
 		return false
 	}
 	s.options = h.Options()
-	//s.parsedOptions = header.ParseTCPOptions(s.options)
+	s.parsedOptions = header.ParseTCPOptions(s.options)
+
+	log.Println(h)
+	fmt.Println(s.parsedOptions)
+
 	s.data.TrimFront(offset)
 
 	s.sequenceNumber = seqnum.Value(h.SequenceNumber())
