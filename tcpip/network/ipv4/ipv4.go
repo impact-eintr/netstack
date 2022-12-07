@@ -110,8 +110,11 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable, payload b
 	if protocol == header.ICMPv4ProtocolNumber {
 		log.Println("IP 写回ICMP报文", header.IPv4(append(ip, payload.ToView()...)))
 	} else {
-		//log.Printf("send ipv4 packet %d bytes, proto: 0x%x", hdr.UsedLength()+payload.Size(), protocol)
-		log.Println(header.IPv4(append(ip, payload.ToView()...)))
+		if payload.Size() == 0 {
+			log.Printf("send ipv4 packet %d bytes, proto: 0x%x", hdr.UsedLength()+payload.Size(), protocol)
+		} else {
+			log.Println(header.IPv4(append(ip, payload.ToView()...)))
+		}
 	}
 	return e.linkEP.WritePacket(r, hdr, payload, ProtocolNumber)
 }

@@ -263,6 +263,7 @@ func (e *endpoint) handleSynSegment(ctx *listenContext, s *segment, opts *header
 // handleListenSegment is called when a listening endpoint receives a segment
 // and needs to handle it.
 func (e *endpoint) handleListenSegment(ctx *listenContext, s *segment) {
+	log.Println(s.flags)
 	switch s.flags {
 	case flagSyn: // syn报文处理
 		// 分析tcp选项
@@ -276,6 +277,8 @@ func (e *endpoint) handleListenSegment(ctx *listenContext, s *segment) {
 	// 返回一个syn+ack报文
 	case flagFin: // fin报文处理
 		// 三次握手最后一次 ack 报文
+	default:
+		panic(nil)
 	}
 }
 
@@ -306,6 +309,7 @@ func (e *endpoint) protocolListenLoop(rcvWnd seqnum.Size) *tcpip.Error {
 	for {
 		switch index, _ := s.Fetch(true); index { // Fetch(true) 阻塞获取
 		case wakerForNewSegment:
+			log.Println("新数据来咯 欸嘿嘿嘿")
 			mayRequeue := true
 			// 接收和处理tcp报文
 			for i := 0; i < maxSegmentsPerWake; i++ {
@@ -325,6 +329,8 @@ func (e *endpoint) protocolListenLoop(rcvWnd seqnum.Size) *tcpip.Error {
 		case wakerForNotification:
 			// TODO 触发其他事件
 			log.Println("其他事件?")
+		default:
+			panic((nil))
 		}
 	}
 }

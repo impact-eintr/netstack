@@ -233,7 +233,9 @@ func (s *Sleeper) Fetch(block bool) (id int, ok bool) {
 		// Reassociate the waker with the sleeper. If the waker was
 		// still asserted we can return it, otherwise try the next one.
 		old := (*Sleeper)(atomic.SwapPointer(&w.s, usleeper(s)))
+		log.Println("Sleeper", unsafe.Pointer(s), "old", unsafe.Pointer(old), "&assertSleeper", unsafe.Pointer(&assertedSleeper), "w.id", w.id)
 		if old == &assertedSleeper {
+			log.Println("成功返回 没有阻塞")
 			return w.id, true
 		}
 	}

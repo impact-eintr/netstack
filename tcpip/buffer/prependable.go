@@ -23,7 +23,7 @@ func (p Prependable) UsedLength() int {
 	return len(p.buf) - p.usedIdx
 }
 
-// 从内到外暴露报文头的协议 eth|ipv4|tcp
+// Prepend 向前扩展size个字节
 func (p *Prependable) Prepend(size int) []byte {
 	if size > p.usedIdx {
 		return nil

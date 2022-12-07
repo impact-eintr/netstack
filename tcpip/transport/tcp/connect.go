@@ -205,14 +205,14 @@ func (h *handshake) execute() *tcpip.Error {
 			// 如果是客户端当发送 syn 报文，超过一定的时间未收到回包，触发超时重传
 			// 如果是服务端当发送 syn+ack 报文，超过一定的时间未收到 ack 回包，触发超时重传
 			// 超时时间变为上次的2倍
-			timeOut *= 2
-			if timeOut > 60*time.Second {
-				return tcpip.ErrTimeout
-			}
-			rt.Reset(timeOut)
-			// 重新发送syn报文
-			sendSynTCP(&h.ep.route, h.ep.id, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
-
+			//timeOut *= 2
+			//if timeOut > 60*time.Second {
+			//	return tcpip.ErrTimeout
+			//}
+			//rt.Reset(timeOut)
+			//// 重新发送syn报文
+			//sendSynTCP(&h.ep.route, h.ep.id, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
+			log.Println("超时重发了 xdm")
 		case wakerForNotification:
 
 		case wakerForNewSegment:
@@ -308,7 +308,6 @@ func sendSynTCP(r *stack.Route, id stack.TransportEndpointID, flags byte,
 // 发送一个tcp段数据，封装 tcp 首部，并写入网路层
 func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.VectorisedView, ttl uint8, flags byte,
 	seq, ack seqnum.Value, rcvWnd seqnum.Size, opts []byte) *tcpip.Error {
-	log.Println("进行一个报文的发送")
 	optLen := len(opts)
 	// Allocate a buffer for the TCP header.
 	hdr := buffer.NewPrependable(header.TCPMinimumSize + int(r.MaxHeaderLength()) + optLen)
