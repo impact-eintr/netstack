@@ -306,7 +306,6 @@ func (e *endpoint) protocolListenLoop(rcvWnd seqnum.Size) *tcpip.Error {
 	for {
 		switch index, _ := s.Fetch(true); index { // Fetch(true) 阻塞获取
 		case wakerForNewSegment:
-			log.Println("处理处理")
 			mayRequeue := true
 			// 接收和处理tcp报文
 			for i := 0; i < maxSegmentsPerWake; i++ {
@@ -325,6 +324,7 @@ func (e *endpoint) protocolListenLoop(rcvWnd seqnum.Size) *tcpip.Error {
 			}
 		case wakerForNotification:
 			// TODO 触发其他事件
+			log.Println("其他事件?")
 		}
 	}
 }

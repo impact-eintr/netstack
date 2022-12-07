@@ -149,10 +149,14 @@ func (s *Sleeper) AddWaker(w *Waker, id int) {
 
 // nextWaker returns the next waker in the notification list, blocking if
 // needed.
+// listenLoop的Sleeper尝试改变自己的调度 如果没有人等着催 就睡
+// 设置了block的话 尝试去获取本地列表中的唤醒者 并取出最前面的唤醒者
+// 要是本地列表为空 就去遍历共享列表
 func (s *Sleeper) nextWaker(block bool) *Waker {
 	// Attempt to replenish the local list if it's currently empty.
 	if s.localList == nil {
-		for atomic.LoadPointer(&s.sharedList) == nil {
+		// 首次进入循环 检查共享链表为空 可能需要睡
+		for atomic.LoadPointer(&s.sharedList) == nil { // 被唤醒 再次检查共享链表情况 很有可能有人催了
 			// Fail request if caller requested that we
 			// don't block.
 			if !block {
@@ -163,13 +167,13 @@ func (s *Sleeper) nextWaker(block bool) *Waker {
 			// this allows them to abort the wait by setting
 			// waitingG back to zero (which we'll notice
 			// before committing the sleep).
-			atomic.StoreUintptr(&s.waitingG, preparingG)
+			atomic.StoreUintptr(&s.waitingG, preparingG) // 准备睡
 
 			// Check if something was queued while we were
 			// preparing to sleep. We need this interleaving
 			// to avoid missing wake ups.
-			if atomic.LoadPointer(&s.sharedList) != nil {
-				atomic.StoreUintptr(&s.waitingG, 0)
+			if atomic.LoadPointer(&s.sharedList) != nil { // 有人催了 不睡了
+				atomic.StoreUintptr(&s.waitingG, 0) // 放弃睡眠
 				break
 			}
 
@@ -180,16 +184,20 @@ func (s *Sleeper) nextWaker(block bool) *Waker {
 			// commitSleep to decide whether to immediately
 			// wake the caller up or to leave it sleeping.
 			const traceEvGoBlockSelect = 24
+			log.Println(atomic.LoadUintptr(&s.waitingG), "进入睡眠")
+			// 没人催 进入睡眠
 			gopark(commitSleep, &s.waitingG, "sleeper", traceEvGoBlockSelect, 0)
 		}
+		log.Println(atomic.LoadPointer(&s.sharedList), "唤醒了", atomic.LoadUintptr(&s.waitingG))
 
 		// Pull the shared list out and reverse it in the local
 		// list. Given that wakers push themselves in reverse
 		// order, we fix things here.
-		v := (*Waker)(atomic.SwapPointer(&s.sharedList, nil))
-		for v != nil {
+		// 将共享列表拉出来，在本地列表中反转。鉴于唤醒者以相反的顺序推动自己，我们在这里解决问题
+		v := (*Waker)(atomic.SwapPointer(&s.sharedList, nil)) // 这里将唤醒者置空
+		for v != nil {                                        // 共享链表有东西 找到最后一位
 			cur := v
-			v = v.next
+			v = v.next // 向后遍历共享链表
 
 			cur.next = s.localList
 			s.localList = cur
@@ -216,6 +224,7 @@ func (s *Sleeper) nextWaker(block bool) *Waker {
 //	allowed to call this method.
 func (s *Sleeper) Fetch(block bool) (id int, ok bool) {
 	for {
+		// 这个s是ListenLoop的Sleeper
 		w := s.nextWaker(block) // 如果没有 将暂停调度 call gopark
 		if w == nil {
 			return -1, false
@@ -283,11 +292,12 @@ func (s *Sleeper) Done() {
 
 // enqueueAssertedWaker enqueues an asserted waker to the "ready" circular list
 // of wakers that want to notify the sleeper.
-func (s *Sleeper) enqueueAssertedWaker(w *Waker) {
+func (s *Sleeper) enqueueAssertedWaker(w *Waker) { // w.s 是 assertSleeper
 	// Add the new waker to the front of the list.
 	for {
 		v := (*Waker)(atomic.LoadPointer(&s.sharedList))
 		w.next = v
+		// 每个新连接的 newSegmentWaker.s.sharedList 初始化为 正在睡眠的 listenLoop 的waker
 		if atomic.CompareAndSwapPointer(&s.sharedList, uwaker(v), uwaker(w)) {
 			break
 		}
@@ -296,7 +306,8 @@ func (s *Sleeper) enqueueAssertedWaker(w *Waker) {
 	for {
 		// Nothing to do if there isn't a G waiting.
 		g := atomic.LoadUintptr(&s.waitingG)
-		if g == 0 {
+		log.Println("tcp端 所在的G: ", g)
+		if g == 0 { // 0 表示 醒着
 			return
 		}
 
@@ -304,6 +315,7 @@ func (s *Sleeper) enqueueAssertedWaker(w *Waker) {
 		if atomic.CompareAndSwapUintptr(&s.waitingG, g, 0) {
 			if g != preparingG {
 				// We managed to get a G. Wake it up.
+				log.Println(g, "去唤醒 0")
 				goready(g, 0)
 			}
 		}
@@ -347,21 +359,23 @@ type Waker struct {
 // Assert moves the waker to an asserted state, if it isn't asserted yet. When
 // asserted, the waker will cause its matching sleeper to wake up.
 func (w *Waker) Assert() {
-	log.Println("Assert...")
+	log.Println(unsafe.Pointer(w), "Assert", &assertedSleeper)
 	// Nothing to do if the waker is already asserted. This check allows us
 	// to complete this case (already asserted) without any interlocked
 	// operations on x86.
 	if atomic.LoadPointer(&w.s) == usleeper(&assertedSleeper) {
+		log.Println("已经叫过了")
 		return
 	}
 
+	log.Println("Asserting ...")
 	// Mark the waker as asserted, and wake up a sleeper if there is one.
 	switch s := (*Sleeper)(atomic.SwapPointer(&w.s, usleeper(&assertedSleeper))); s {
 	case nil:
 	case &assertedSleeper:
-	default:
-		log.Println("唤醒", s)
-		s.enqueueAssertedWaker(w) // call goready
+	default: // 初始态
+		log.Println("唤醒", s.waitingG)
+		s.enqueueAssertedWaker(w) // s 是tcp端的newSegmentWaker call goready
 	}
 }
 
