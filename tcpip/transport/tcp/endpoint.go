@@ -130,7 +130,7 @@ func newEndpoint(stack *stack.Stack, netProto tcpip.NetworkProtocolNumber, waite
 }
 
 func (e *endpoint) Close() {
-
+	log.Println("TODO 在写了 在写了")
 }
 
 func (e *endpoint) Read(*tcpip.FullAddress) (buffer.View, tcpip.ControlMessages, *tcpip.Error) {

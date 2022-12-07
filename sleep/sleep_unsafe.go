@@ -68,6 +68,7 @@
 package sleep
 
 import (
+	"log"
 	"sync/atomic"
 	"unsafe"
 )
@@ -346,6 +347,7 @@ type Waker struct {
 // Assert moves the waker to an asserted state, if it isn't asserted yet. When
 // asserted, the waker will cause its matching sleeper to wake up.
 func (w *Waker) Assert() {
+	log.Println("Assert...")
 	// Nothing to do if the waker is already asserted. This check allows us
 	// to complete this case (already asserted) without any interlocked
 	// operations on x86.
@@ -358,6 +360,7 @@ func (w *Waker) Assert() {
 	case nil:
 	case &assertedSleeper:
 	default:
+		log.Println("唤醒", s)
 		s.enqueueAssertedWaker(w) // call goready
 	}
 }

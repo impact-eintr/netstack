@@ -224,8 +224,24 @@ func (l *listenContext) createEndpointAndPerformHandshake(s *segment, opts *head
 	if err != nil {
 		return nil, err
 	}
-	// 执行三次握手
+
+	// 以下执行三次握手
+
+	// 构建handshake管理器
 	h, err := newHandshake(ep, l.rcvWnd)
+	if err != nil {
+		ep.Close()
+		return nil, err
+	}
+
+	// 标记状态为 handshakeSynRcvd 和 h.flags为 syn+ack
+	h.resetToSynRcvd(cookie, irs, opts)
+	if err := h.execute(); err != nil {
+		ep.Close()
+		return nil, err
+	}
+
+	// 更新接收窗口扩张因子
 
 	return ep, nil
 }
@@ -290,6 +306,7 @@ func (e *endpoint) protocolListenLoop(rcvWnd seqnum.Size) *tcpip.Error {
 	for {
 		switch index, _ := s.Fetch(true); index { // Fetch(true) 阻塞获取
 		case wakerForNewSegment:
+			log.Println("处理处理")
 			mayRequeue := true
 			// 接收和处理tcp报文
 			for i := 0; i < maxSegmentsPerWake; i++ {
