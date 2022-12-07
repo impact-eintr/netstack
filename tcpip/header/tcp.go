@@ -261,9 +261,41 @@ func (b TCP) SetChecksum(checksum uint16) {
 	binary.BigEndian.PutUint16(b[tcpChecksum:], checksum)
 }
 
+// CalculateChecksum calculates the checksum of the tcp segment given
+// the totalLen and partialChecksum(descriptions below)
+// totalLen is the total length of the segment
+// partialChecksum is the checksum of the network-layer pseudo-header
+// (excluding the total length) and the checksum of the segment data.
+func (b TCP) CalculateChecksum(partialChecksum uint16, totalLen uint16) uint16 {
+	// Add the length portion of the checksum to the pseudo-checksum.
+	tmp := make([]byte, 2)
+	binary.BigEndian.PutUint16(tmp, totalLen)
+	checksum := Checksum(tmp, partialChecksum)
+
+	// Calculate the rest of the checksum.
+	return Checksum(b[:b.DataOffset()], checksum)
+}
+
 // Options returns a slice that holds the unparsed TCP options in the segment.
 func (b TCP) Options() []byte {
 	return b[TCPMinimumSize:b.DataOffset()]
+}
+
+func (b TCP) encodeSubset(seq, ack uint32, flags uint8, rcvwnd uint16) {
+	binary.BigEndian.PutUint32(b[seqNum:], seq)
+	binary.BigEndian.PutUint32(b[ackNum:], ack)
+	b[tcpFlags] = flags
+	binary.BigEndian.PutUint16(b[winSize:], rcvwnd)
+}
+
+// Encode encodes all the fields of the tcp header.
+func (b TCP) Encode(t *TCPFields) {
+	b.encodeSubset(t.SeqNum, t.AckNum, t.Flags, t.WindowSize)
+	binary.BigEndian.PutUint16(b[srcPort:], t.SrcPort)
+	binary.BigEndian.PutUint16(b[dstPort:], t.DstPort)
+	b[dataOffset] = (t.DataOffset / 4) << 4
+	binary.BigEndian.PutUint16(b[tcpChecksum:], t.Checksum)
+	binary.BigEndian.PutUint16(b[urgentPtr:], t.UrgentPointer)
 }
 
 // ParseTCPOptions extracts and stores all known options in the provided byte
@@ -430,6 +462,112 @@ func ParseSynOptions(opts []byte, isAck bool) TCPSynOptions {
 
 func (opts TCPSynOptions) String() string {
 	return fmt.Sprintf("|%d|%d|%v|%d|%d|%v|", opts.MSS, opts.WS, opts.TS, opts.TSVal, opts.TSEcr, opts.SACKPermitted)
+}
+
+// EncodeMSSOption encodes the MSS TCP option with the provided MSS values in
+// the supplied buffer. If the provided buffer is not large enough then it just
+// returns without encoding anything. It returns the number of bytes written to
+// the provided buffer.
+func EncodeMSSOption(mss uint32, b []byte) int {
+	// mssOptionSize is the number of bytes in a valid MSS option.
+	const mssOptionSize = 4
+
+	if len(b) < mssOptionSize {
+		return 0
+	}
+	b[0], b[1], b[2], b[3] = TCPOptionMSS, mssOptionSize, byte(mss>>8), byte(mss)
+	return mssOptionSize
+}
+
+// EncodeWSOption encodes the WS TCP option with the WS value in the
+// provided buffer. If the provided buffer is not large enough then it just
+// returns without encoding anything. It returns the number of bytes written to
+// the provided buffer.
+func EncodeWSOption(ws int, b []byte) int {
+	if len(b) < 3 {
+		return 0
+	}
+	b[0], b[1], b[2] = TCPOptionWS, 3, uint8(ws)
+	return int(b[1])
+}
+
+// EncodeTSOption encodes the provided tsVal and tsEcr values as a TCP timestamp
+// option into the provided buffer. If the buffer is smaller than expected it
+// just returns without encoding anything. It returns the number of bytes
+// written to the provided buffer.
+func EncodeTSOption(tsVal, tsEcr uint32, b []byte) int {
+	if len(b) < 10 {
+		return 0
+	}
+	b[0], b[1] = TCPOptionTS, 10
+	binary.BigEndian.PutUint32(b[2:], tsVal)
+	binary.BigEndian.PutUint32(b[6:], tsEcr)
+	return int(b[1])
+}
+
+// EncodeSACKPermittedOption encodes a SACKPermitted option into the provided
+// buffer. If the buffer is smaller than required it just returns without
+// encoding anything. It returns the number of bytes written to the provided
+// buffer.
+func EncodeSACKPermittedOption(b []byte) int {
+	if len(b) < 2 {
+		return 0
+	}
+
+	b[0], b[1] = TCPOptionSACKPermitted, 2
+	return int(b[1])
+}
+
+// EncodeSACKBlocks encodes the provided SACK blocks as a TCP SACK option block
+// in the provided slice. It tries to fit in as many blocks as possible based on
+// number of bytes available in the provided buffer. It returns the number of
+// bytes written to the provided buffer.
+func EncodeSACKBlocks(sackBlocks []SACKBlock, b []byte) int {
+	if len(sackBlocks) == 0 {
+		return 0
+	}
+	l := len(sackBlocks)
+	if l > TCPMaxSACKBlocks {
+		l = TCPMaxSACKBlocks
+	}
+	if ll := (len(b) - 2) / 8; ll < l {
+		l = ll
+	}
+	if l == 0 {
+		// There is not enough space in the provided buffer to add
+		// any SACK blocks.
+		return 0
+	}
+	b[0] = TCPOptionSACK
+	b[1] = byte(l*8 + 2)
+	for i := 0; i < l; i++ {
+		binary.BigEndian.PutUint32(b[i*8+2:], uint32(sackBlocks[i].Start))
+		binary.BigEndian.PutUint32(b[i*8+6:], uint32(sackBlocks[i].End))
+	}
+	return int(b[1])
+}
+
+// EncodeNOP adds an explicit NOP to the option list.
+func EncodeNOP(b []byte) int {
+	if len(b) == 0 {
+		return 0
+	}
+	b[0] = TCPOptionNOP
+	return 1
+}
+
+// AddTCPOptionPadding adds the required number of TCPOptionNOP to quad align
+// the option buffer. It adds padding bytes after the offset specified and
+// returns the number of padding bytes added. The passed in options slice
+// must have space for the padding bytes.
+func AddTCPOptionPadding(options []byte, offset int) int {
+	paddingToAdd := -offset & 3
+	// Now add any padding bytes that might be required to quad align the
+	// options.
+	for i := offset; i < offset+paddingToAdd; i++ {
+		options[i] = TCPOptionNOP
+	}
+	return paddingToAdd
 }
 
 /*
