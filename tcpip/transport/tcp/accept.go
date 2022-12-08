@@ -241,7 +241,7 @@ func (l *listenContext) createEndpointAndPerformHandshake(s *segment, opts *head
 		return nil, err
 	}
 
-	// 更新接收窗口扩张因子
+	// TODO 更新接收窗口扩张因子
 
 	return ep, nil
 }
@@ -263,7 +263,6 @@ func (e *endpoint) handleSynSegment(ctx *listenContext, s *segment, opts *header
 // handleListenSegment is called when a listening endpoint receives a segment
 // and needs to handle it.
 func (e *endpoint) handleListenSegment(ctx *listenContext, s *segment) {
-	log.Println(s.flags)
 	switch s.flags {
 	case flagSyn: // syn报文处理
 		// 分析tcp选项
@@ -272,13 +271,24 @@ func (e *endpoint) handleListenSegment(ctx *listenContext, s *segment) {
 			s.incRef()
 			go e.handleSynSegment(ctx, s, &opts)
 		} else {
-			log.Println("暂时不处理")
+			cookie := ctx.createCookie(s.id, s.sequenceNumber, encodeMSS(opts.MSS))
+			// Send SYN with window scaling because we currently
+			// dont't encode this information in the cookie.
+			//
+			// Enable Timestamp option if the original syn did have
+			// the timestamp option specified.
+			synOpts := header.TCPSynOptions{
+				WS:    -1,
+				TS:    opts.TS,
+				TSVal: tcpTimeStamp(timeStampOffset()),
+				TSEcr: opts.TSVal,
+			}
+			// 返回 syn+ack 报文
+			sendSynTCP(&s.route, s.id, flagSyn|flagAck, cookie, s.sequenceNumber+1, ctx.rcvWnd, synOpts)
 		}
 	// 返回一个syn+ack报文
 	case flagFin: // fin报文处理
 		// 三次握手最后一次 ack 报文
-	default:
-		panic(nil)
 	}
 }
 
@@ -292,6 +302,10 @@ func parseSynSegmentOptions(s *segment) header.TCPSynOptions {
 }
 
 // protocolListenLoop 是侦听TCP端点的主循环。它在自己的goroutine中运行，负责处理连接请求
+// 什么叫处理连接请求呢 其实就是 ep.Listen()时在协议栈中注册了一个Laddr+LPort的组合
+// 当有客户端给服务端发送 syn 报文时 由于是新连接 所以服务端并没有相关信息
+// 服务端会把这个报文交给 LAddr:LPort 的ep 去处理 也就是以下Loop
+// 在验证通过后 会新建并注册一个 LAddr:LPort+RAddr:RPort的新ep 由它来处理后续的请求
 func (e *endpoint) protocolListenLoop(rcvWnd seqnum.Size) *tcpip.Error {
 	defer func() {
 		// TODO 后置处理
@@ -307,9 +321,10 @@ func (e *endpoint) protocolListenLoop(rcvWnd seqnum.Size) *tcpip.Error {
 	s.AddWaker(&e.notificationWaker, wakerForNotification)
 
 	for {
-		switch index, _ := s.Fetch(true); index { // Fetch(true) 阻塞获取
+		var index int
+		switch index, _ = s.Fetch(true); index { // Fetch(true) 阻塞获取
 		case wakerForNewSegment:
-			log.Println("新数据来咯 欸嘿嘿嘿")
+			log.Println("你是一个一个新连接")
 			mayRequeue := true
 			// 接收和处理tcp报文
 			for i := 0; i < maxSegmentsPerWake; i++ {
@@ -333,4 +348,31 @@ func (e *endpoint) protocolListenLoop(rcvWnd seqnum.Size) *tcpip.Error {
 			panic((nil))
 		}
 	}
+}
+
+// tcpTimeStamp returns a timestamp offset by the provided offset. This is
+// not inlined above as it's used when SYN cookies are in use and endpoint
+// is not created at the time when the SYN cookie is sent.
+func tcpTimeStamp(offset uint32) uint32 {
+	now := time.Now()
+	return uint32(now.Unix()*1000+int64(now.Nanosecond()/1e6)) + offset
+}
+
+// timeStampOffset returns a randomized timestamp offset to be used when sending
+// timestamp values in a timestamp option for a TCP segment.
+func timeStampOffset() uint32 {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	// Initialize a random tsOffset that will be added to the recentTS
+	// everytime the timestamp is sent when the Timestamp option is enabled.
+	//
+	// See https://tools.ietf.org/html/rfc7323#section-5.4 for details on
+	// why this is required.
+	//
+	// NOTE: This is not completely to spec as normally this should be
+	// initialized in a manner analogous to how sequence numbers are
+	// randomized per connection basis. But for now this is sufficient.
+	return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
 }

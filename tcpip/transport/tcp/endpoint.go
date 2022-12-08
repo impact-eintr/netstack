@@ -9,8 +9,10 @@ import (
 	"netstack/tcpip/header"
 	"netstack/tcpip/seqnum"
 	"netstack/tcpip/stack"
+	"netstack/tmutex"
 	"netstack/waiter"
 	"sync"
+	"unsafe"
 )
 
 // tcp状态机的状态
@@ -30,6 +32,8 @@ const (
 // endpoint 表示TCP端点。该结构用作端点用户和协议实现之间的接口;让并发goroutine调用端点是合法的，
 // 它们是正确同步的。然而，协议实现在单个goroutine中运行。
 type endpoint struct {
+	workMu tmutex.Mutex
+
 	stack       *stack.Stack                // 网络协议栈
 	netProto    tcpip.NetworkProtocolNumber // 网络协议号 ipv4 ipv6
 	waiterQueue *waiter.Queue               // 事件驱动机制
@@ -126,6 +130,8 @@ func newEndpoint(stack *stack.Stack, netProto tcpip.NetworkProtocolNumber, waite
 	}
 	// TODO 需要添加
 	e.segmentQueue.setLimit(2 * e.rcvBufSize)
+	e.workMu.Init()
+	e.workMu.Lock()
 	return e
 }
 
@@ -178,7 +184,7 @@ func (e *endpoint) Shutdown(flags tcpip.ShutdownFlags) *tcpip.Error {
 }
 
 func (e *endpoint) Listen(backlog int) (err *tcpip.Error) {
-	log.Println("监听一个tcp端口")
+	log.Println("监听一个tcp端口", unsafe.Pointer(e))
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	defer func() {
@@ -207,7 +213,7 @@ func (e *endpoint) Listen(backlog int) (err *tcpip.Error) {
 	e.workerRunning = true
 
 	e.stack.Stats().TCP.PassiveConnectionOpenings.Increment()
-	// TODO tcp服务端实现的主循环，这个函数很重要，用一个goroutine来服务
+	// tcp服务端实现的主循环，这个函数很重要，用一个goroutine来服务
 	go e.protocolListenLoop(seqnum.Size(0))
 
 	return nil

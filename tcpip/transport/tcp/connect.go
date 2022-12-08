@@ -118,7 +118,6 @@ func (h *handshake) resetToSynRcvd(iss seqnum.Value, irs seqnum.Value, opts *hea
 }
 
 func (h *handshake) resolveRoute() *tcpip.Error {
-	log.Printf("tcp resolveRoute")
 	// Set up the wakers.
 	s := sleep.Sleeper{}
 	resolutionWaker := &sleep.Waker{}
@@ -205,12 +204,12 @@ func (h *handshake) execute() *tcpip.Error {
 			// 如果是客户端当发送 syn 报文，超过一定的时间未收到回包，触发超时重传
 			// 如果是服务端当发送 syn+ack 报文，超过一定的时间未收到 ack 回包，触发超时重传
 			// 超时时间变为上次的2倍
-			//timeOut *= 2
-			//if timeOut > 60*time.Second {
-			//	return tcpip.ErrTimeout
-			//}
-			//rt.Reset(timeOut)
-			//// 重新发送syn报文
+			timeOut *= 2
+			if timeOut > 60*time.Second {
+				return tcpip.ErrTimeout
+			}
+			rt.Reset(timeOut)
+			// 重新发送syn|ack报文
 			//sendSynTCP(&h.ep.route, h.ep.id, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
 			log.Println("超时重发了 xdm")
 		case wakerForNotification:
@@ -354,10 +353,52 @@ func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.Vectorise
 	return r.WritePacket(hdr, data, ProtocolNumber, ttl)
 }
 
+// handleSegments 从队列中取出 tcp 段数据，然后处理它们。
+func (e *endpoint) handleSegments() *tcpip.Error {
+	return nil
+}
+
 // protocolMainLoop 是TCP协议的主循环。它在自己的goroutine中运行，负责握手、发送段和处理收到的段
 func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
+	// Set up the functions that will be called when the main protocol loop
+	// wakes up.
+	// 触发器的事件，这些函数很重要
+	funcs := []struct {
+		w *sleep.Waker
+		f func() *tcpip.Error
+	}{
+		{},
+		{},
+		{
+			w: &e.newSegmentWaker,
+			f: e.handleSegments,
+		},
+	}
+
+	// Initialize the sleeper based on the wakers in funcs.
+	s := sleep.Sleeper{}
+	for i := range funcs {
+		s.AddWaker(funcs[i].w, i)
+	}
+
+	// 主循环，处理tcp报文
+	// 要使这个主循环结束，也就是tcp连接完全关闭，得同时满足三个条件：
+	// 1，接收器关闭了 2，发送器关闭了 3，下一个未确认的序列号等于添加到发送列表的下一个段的序列号
+	//for !e.rcv.closed || !e.snd.closed || e.snd.sndUna != e.snd.sndNxtList {
 	for {
-		log.Println("三次握手机制在这里实现")
-		select {}
+		e.workMu.Unlock()
+		// s.Fetch 会返回事件的index，比如 v=0 的话，
+		// funcs[v].f()就是调用 e.handleWrite
+		// 所以这里的函数应该尽量不阻塞，否则会影响其他事件的接收
+		v, _ := s.Fetch(true)
+		e.workMu.Lock()
+		if err := funcs[v].f(); err != nil {
+			e.mu.Lock()
+			//e.resetConnectionLocked(err)
+			//// Lock released below.
+			//epilogue()
+			log.Println(err)
+			return nil
+		}
 	}
 }

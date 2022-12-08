@@ -106,6 +106,8 @@ func (d *transportDemuxer) deliverControlPacket(net tcpip.NetworkProtocolNumber,
 }
 
 // 根据传输层id来找到相应的传输层端
+// 当本地没有存在连接的时候 只有 LocalAddr:LocalPort 监听的传输端 也就是客户端来建立新连接
+// 当本地存在连接的时候 就有可能找到 LAddr:LPort+RAddr:RPort 的传输端
 func (d *transportDemuxer) findEndpointLocked(eps *transportEndpoints,
 	vv buffer.VectorisedView, id TransportEndpointID) TransportEndpoint {
 	if ep := eps.endpoints[id]; ep != nil { // IPv4:udp
