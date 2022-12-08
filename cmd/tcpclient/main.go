@@ -17,7 +17,9 @@ func main() {
 		log.Println("连接建立")
 		conn.Write([]byte("helloworld"))
 		log.Println("发送了数据")
-		conn.Close()
+		buf := make([]byte, 1024)
+		conn.Read(buf)
+		//conn.Close()
 	}()
 
 	t := time.NewTimer(1000 * time.Millisecond)

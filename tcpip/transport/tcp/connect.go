@@ -215,7 +215,7 @@ func (h *handshake) handleSegment(s *segment) *tcpip.Error {
 	if !s.flagIsSet(flagSyn) && h.sndWndScale > 0 {
 		h.sndWnd <<= uint8(h.sndWndScale)
 	}
-	log.Println(h.sndWnd)
+	//log.Println(h.sndWnd)
 
 	switch h.state {
 	case handshakeSynRcvd:
@@ -311,8 +311,7 @@ func (h *handshake) execute() *tcpip.Error {
 			}
 			rt.Reset(timeOut)
 			// 重新发送syn|ack报文
-			//sendSynTCP(&h.ep.route, h.ep.id, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
-			log.Println("超时重发了 xdm")
+			sendSynTCP(&h.ep.route, h.ep.id, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
 		case wakerForNotification:
 
 		case wakerForNewSegment:
@@ -469,7 +468,7 @@ func (e *endpoint) handleClose() *tcpip.Error {
 
 // handleSegments 从队列中取出 tcp 段数据，然后处理它们。
 func (e *endpoint) handleSegments() *tcpip.Error {
-	log.Println("年轻人的第一条数据")
+	//log.Println("年轻人的第一条数据")
 	checkRequeue := true
 	for i := 0; i < maxSegmentsPerWake; i++ {
 		s := e.segmentQueue.dequeue()

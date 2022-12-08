@@ -66,6 +66,8 @@ type endpoint struct {
 	// address).
 	effectiveNetProtos []tcpip.NetworkProtocolNumber
 
+	hardError *tcpip.Error
+
 	// workerRunning specifies if a worker goroutine is running.
 	workerRunning bool
 
@@ -139,8 +141,49 @@ func (e *endpoint) Close() {
 	log.Println("TODO 在写了 在写了")
 }
 
+// Read 从tcp的接收队列中读取数据
 func (e *endpoint) Read(*tcpip.FullAddress) (buffer.View, tcpip.ControlMessages, *tcpip.Error) {
-	return nil, tcpip.ControlMessages{}, nil
+	e.mu.RLock()
+
+	e.rcvListMu.Lock()
+	bufUsed := e.rcvBufUsed
+	if s := e.state; s != stateConnected && s != stateClosed && bufUsed == 0 {
+		e.rcvListMu.Unlock()
+		he := e.hardError
+		e.mu.RUnlock()
+		if s == stateError {
+			return buffer.View{}, tcpip.ControlMessages{}, he
+		}
+		return buffer.View{}, tcpip.ControlMessages{}, tcpip.ErrInvalidEndpointState
+	}
+
+	v, err := e.readLocked()
+	e.rcvListMu.Unlock()
+	e.mu.RUnlock()
+	return v, tcpip.ControlMessages{}, err
+}
+
+// 从tcp的接收队列中读取数据，并从接收队列中删除已读数据
+func (e *endpoint) readLocked() (buffer.View, *tcpip.Error) {
+	if e.rcvBufUsed == 0 {
+		if e.rcvClosed || e.state != stateConnected {
+			return buffer.View{}, tcpip.ErrClosedForReceive
+		}
+		return buffer.View{}, tcpip.ErrWouldBlock
+	}
+	s := e.rcvList.Front()
+	views := s.data.Views()
+	v := views[s.viewToDeliver]
+	s.viewToDeliver++
+
+	if s.viewToDeliver >= len(views) {
+		e.rcvList.Remove(s)
+		s.decRef()
+	}
+	log.Println("读到了数据", views, v)
+	// TODO 流量检测
+
+	return v, nil
 }
 
 func (e *endpoint) Write(tcpip.Payload, tcpip.WriteOptions) (uintptr, <-chan struct{}, *tcpip.Error) {
@@ -175,8 +218,117 @@ func (e *endpoint) checkV4Mapped(addr *tcpip.FullAddress) (tcpip.NetworkProtocol
 	return netProto, nil
 }
 
+// Connect 这是客户端用的吧
 func (e *endpoint) Connect(address tcpip.FullAddress) *tcpip.Error {
-	return nil
+	return e.connect(address, true, true)
+}
+
+// connect将端点连接到其对等端。在正常的非S/R情况下，新连接应该运行主goroutine并执行握手。
+// 在恢复先前连接的端点时，将被动地创建两端（因此不会进行新的握手）;对于应用程序尚未接受的堆栈接受连接，
+// 它们将在不运行主goroutine的情况下进行恢复。
+func (e *endpoint) connect(addr tcpip.FullAddress, handshake bool, run bool) (err *tcpip.Error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	defer func() {
+		if err != nil && !err.IgnoreStats() {
+			e.stack.Stats().TCP.FailedConnectionAttempts.Increment()
+		}
+	}()
+
+	connectingAddr := addr.Addr
+
+	// 检查ipv4是否映射到ipv6
+	netProto, err := e.checkV4Mapped(&addr)
+	if err != nil {
+		return err
+	}
+
+	nicid := addr.NIC
+	// 判断连接的状态
+	switch e.state {
+	case stateBound:
+		// If we're already bound to a NIC but the caller is requesting
+		// that we use a different one now, we cannot proceed.
+		if e.boundNICID == 0 {
+			break
+		}
+
+		if nicid != 0 && nicid != e.boundNICID {
+			return tcpip.ErrNoRoute
+		}
+
+		nicid = e.boundNICID
+
+	case stateInitial:
+		// Nothing to do. We'll eventually fill-in the gaps in the ID
+		// (if any) when we find a route.
+
+	case stateConnecting:
+		// A connection request has already been issued but hasn't
+		// completed yet.
+		return tcpip.ErrAlreadyConnecting
+
+	case stateConnected:
+		// The endpoint is already connected. If caller hasn't been notified yet, return success.
+		if !e.isConnectNotified {
+			e.isConnectNotified = true
+			return nil
+		}
+		// Otherwise return that it's already connected.
+		return tcpip.ErrAlreadyConnected
+
+	case stateError:
+		return e.hardError
+
+	default:
+		return tcpip.ErrInvalidEndpointState
+	}
+
+	// Find a route to the desired destination.
+	// 根据目标ip查找路由信息
+	r, err := e.stack.FindRoute(nicid, e.id.LocalAddress, addr.Addr, netProto)
+	if err != nil {
+		return err
+	}
+	defer r.Release()
+
+	origID := e.id
+
+	netProtos := []tcpip.NetworkProtocolNumber{netProto}
+	e.id.LocalAddress = r.LocalAddress
+	e.id.RemoteAddress = r.RemoteAddress
+	e.id.RemotePort = addr.Port
+
+	if e.id.LocalPort != 0 {
+		// 记录和检查原端口是否已被使用
+		// The endpoint is bound to a port, attempt to register it.
+		err := e.stack.RegisterTransportEndpoint(nicid, netProtos, ProtocolNumber, e.id, e)
+		if err != nil {
+			return err
+		}
+	} else {
+		// TODO 需要添加
+	}
+
+	// Remove the port reservation. This can happen when Bind is called
+	// before Connect: in such a case we don't want to hold on to
+	// reservations anymore.
+	if e.isPortReserved {
+		e.stack.ReleasePort(e.effectiveNetProtos, ProtocolNumber, origID.LocalAddress, origID.LocalPort)
+		e.isPortReserved = false
+	}
+
+	// 记录该端点的参数
+	e.isRegistered = true
+	e.state = stateConnecting
+	e.route = r.Clone()
+	e.boundNICID = nicid
+	e.effectiveNetProtos = netProtos
+	e.connectingAddress = connectingAddr
+
+	// TODO 需要添加
+
+	return tcpip.ErrConnectStarted
 }
 
 func (e *endpoint) Shutdown(flags tcpip.ShutdownFlags) *tcpip.Error {
@@ -238,7 +390,7 @@ func (e *endpoint) Accept() (tcpip.Endpoint, *waiter.Queue, *tcpip.Error) {
 
 	var n *endpoint
 	select {
-	case n = <-e.acceptedChan:
+	case n = <-e.acceptedChan: // 外部再次调用后尝试取出ep
 		log.Println("监听者进行一个新连接的分发", n.id)
 	default:
 		return nil, nil, tcpip.ErrWouldBlock
@@ -343,7 +495,48 @@ func (e *endpoint) GetRemoteAddress() (tcpip.FullAddress, *tcpip.Error) {
 }
 
 func (e *endpoint) Readiness(mask waiter.EventMask) waiter.EventMask {
-	return waiter.EventErr
+	result := waiter.EventMask(0)
+
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	switch e.state {
+	case stateInitial, stateBound, stateConnecting:
+		// Ready for nothing.
+
+	case stateClosed, stateError:
+		// Ready for anything.
+		result = mask
+
+	case stateListen:
+		// Check if there's anything in the accepted channel.
+		if (mask & waiter.EventIn) != 0 {
+			if len(e.acceptedChan) > 0 {
+				result |= waiter.EventIn
+			}
+		}
+
+	case stateConnected:
+		// Determine if the endpoint is writable if requested.
+		if (mask & waiter.EventOut) != 0 {
+			e.sndBufMu.Lock()
+			if e.sndClosed || e.sndBufUsed < e.sndBufSize {
+				result |= waiter.EventOut
+			}
+			e.sndBufMu.Unlock()
+		}
+
+		// Determine if the endpoint is readable if requested.
+		if (mask & waiter.EventIn) != 0 {
+			e.rcvListMu.Lock()
+			if e.rcvBufUsed > 0 || e.rcvClosed {
+				result |= waiter.EventIn
+			}
+			e.rcvListMu.Unlock()
+		}
+	}
+
+	return result
 }
 
 func (e *endpoint) SetSockOpt(opt interface{}) *tcpip.Error {
@@ -383,6 +576,20 @@ func (e *endpoint) HandlePacket(r *stack.Route, id stack.TransportEndpointID, vv
 
 func (e *endpoint) HandleControlPacket(id stack.TransportEndpointID, typ stack.ControlType, extra uint32, vv buffer.VectorisedView) {
 
+}
+
+func (e *endpoint) readyToRead(s *segment) {
+	e.rcvListMu.Lock()
+	if s != nil {
+		s.incRef()
+		e.rcvBufUsed += s.data.Size()
+		e.rcvList.PushBack(s)
+	} else {
+		e.rcvClosed = true
+	}
+	e.rcvListMu.Unlock()
+
+	e.waiterQueue.Notify(waiter.EventIn)
 }
 
 // receiveBufferAvailable calculates how many bytes are still available in the

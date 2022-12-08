@@ -21,7 +21,8 @@ func (v Value) LessThanEq(w Value) bool {
 
 // InRange v ∈ [a, b)
 func (v Value) InRange(a, b Value) bool {
-	return a <= v && v < b
+	//return a <= v && v < b
+	return v-a < b-a
 }
 
 // InWindows check v in [first, first+size)

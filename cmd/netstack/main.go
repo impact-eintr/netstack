@@ -142,14 +142,21 @@ func main() {
 
 	go func() { // echo server
 		listener := tcpListen(s, proto, addr, localPort)
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				log.Println(err)
-				continue
-			}
-			conn.Read(nil)
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Println(err)
 		}
+		buf := make([]byte, 1024)
+		if _, err := conn.Read(buf); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(string(buf))
+		if string(buf) != "" {
+			conn.Write([]byte("Server echo"))
+		}
+		os.Exit(1)
+
+		select {}
 	}()
 
 	c := make(chan os.Signal)
@@ -165,24 +172,72 @@ type TcpConn struct {
 	notifyCh chan struct{}
 }
 
-// Accept 封装tcp的accept操作
-func (conn *TcpConn) Accept() (tcpip.Endpoint, error) {
+func (conn *TcpConn) Read(rcv []byte) (int, error) {
 	conn.wq.EventRegister(conn.we, waiter.EventIn)
 	defer conn.wq.EventUnregister(conn.we)
 	for {
-		ep, _, err := conn.ep.Accept()
+		buf, _, err := conn.ep.Read(&conn.raddr)
 		if err != nil {
 			if err == tcpip.ErrWouldBlock {
 				<-conn.notifyCh
 				continue
 			}
-			return nil, fmt.Errorf("%s", err.String())
+			return 0, fmt.Errorf("%s", err.String())
 		}
-		return ep, nil
+		n := len(buf)
+		if n > cap(rcv) {
+			n = cap(rcv)
+		}
+		rcv = append(rcv[:0], buf[:n]...)
+		return n, nil
 	}
 }
 
-func tcpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Address, localPort int) *TcpConn {
+func (conn *TcpConn) Write(snd []byte) error {
+	for {
+		_, notifyCh, err := conn.ep.Write(tcpip.SlicePayload(snd), tcpip.WriteOptions{To: &conn.raddr})
+		if err != nil {
+			if err == tcpip.ErrNoLinkAddress {
+				<-notifyCh
+				continue
+			}
+			return fmt.Errorf("%s", err.String())
+		}
+		return nil
+	}
+}
+
+// Listener tcp连接监听器
+type Listener struct {
+	raddr    tcpip.FullAddress
+	ep       tcpip.Endpoint
+	wq       *waiter.Queue
+	we       *waiter.Entry
+	notifyCh chan struct{}
+}
+
+// Accept 封装tcp的accept操作
+func (l *Listener) Accept() (*TcpConn, error) {
+	l.wq.EventRegister(l.we, waiter.EventIn)
+	defer l.wq.EventUnregister(l.we)
+	for {
+		ep, wq, err := l.ep.Accept()
+		if err != nil {
+			if err == tcpip.ErrWouldBlock {
+				<-l.notifyCh
+				continue
+			}
+			return nil, fmt.Errorf("%s", err.String())
+		}
+		waitEntry, notifyCh := waiter.NewChannelEntry(nil)
+		return &TcpConn{ep: ep,
+			wq:       wq,
+			we:       &waitEntry,
+			notifyCh: notifyCh}, nil
+	}
+}
+
+func tcpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Address, localPort int) *Listener {
 	var wq waiter.Queue
 	// 新建一个tcp端
 	ep, err := s.NewEndpoint(tcp.ProtocolNumber, proto, &wq)
@@ -202,7 +257,7 @@ func tcpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Add
 	}
 
 	waitEntry, notifyCh := waiter.NewChannelEntry(nil)
-	return &TcpConn{
+	return &Listener{
 		ep:       ep,
 		wq:       &wq,
 		we:       &waitEntry,

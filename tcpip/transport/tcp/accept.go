@@ -251,7 +251,7 @@ func (e *endpoint) deliverAccepted(n *endpoint) {
 	e.mu.RLock()
 	if e.state == stateListen {
 		e.acceptedChan <- n
-		e.waiterQueue.Notify(waiter.EventIn)
+		e.waiterQueue.Notify(waiter.EventIn) // 通知 Accept() 停止阻塞
 	} else {
 		n.Close()
 	}
