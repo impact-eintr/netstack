@@ -155,6 +155,107 @@ func (h *handshake) resolveRoute() *tcpip.Error {
 	}
 }
 
+// checkAck checks if the ACK number, if present, of a segment received during
+// a TCP 3-way handshake is valid. If it's not, a RST segment is sent back in
+// response.
+func (h *handshake) checkAck(s *segment) bool {
+	if s.flagIsSet(flagAck) && s.ackNumber != h.iss+1 {
+		// RFC 793, page 36, states that a reset must be generated when
+		// the connection is in any non-synchronized state and an
+		// incoming segment acknowledges something not yet sent. The
+		// connection remains in the same state.
+		// TODO 返回一个RST报文
+		//ack := s.sequenceNumber.Add(s.logicalLen())
+		//h.ep.sendRaw(buffer.VectorisedView{}, flagRst|flagAck, s.ackNumber, ack, 0)
+		return false
+	}
+
+	return true
+}
+
+// synSentState 是客户端或者服务端接收到第一个握手报文的处理
+// 正常情况下，如果是客户端，此时应该收到 syn+ack 报文，处理后发送 ack 报文给服务端。
+// 如果是服务端，此时接收到syn报文，那么应该回复 syn+ack 报文给客户端，并设置状态为 handshakeSynRcvd。
+func (h *handshake) synSentState(s *segment) *tcpip.Error {
+	return nil
+}
+
+// synRcvdState handles a segment received when the TCP 3-way handshake is in
+// the SYN-RCVD state.
+// 正常情况下，会调用该函数来处理第三次 ack 报文
+func (h *handshake) synRcvdState(s *segment) *tcpip.Error {
+	if s.flagIsSet(flagRst) {
+		// TODO 需要根据窗口返回 等理解了窗口后再写
+		return nil
+	}
+	// 校验ack报文
+	if !h.checkAck(s) {
+		return nil
+	}
+
+	// 如果是syn报文，且序列号对应不上，那么返回 rst
+	if s.flagIsSet(flagSyn) && s.sequenceNumber != h.ackNum-1 {
+		// TODO 返回RST报文
+		return nil
+	}
+
+	// 如果时ack报文 表示三次握手已经完成
+	if s.flagIsSet(flagAck) {
+		// TODO 修改时间戳
+		h.state = handshakeCompleted
+		return nil
+	}
+
+	return nil
+}
+
+// 握手的时候处理tcp段
+func (h *handshake) handleSegment(s *segment) *tcpip.Error {
+	h.sndWnd = s.window
+	if !s.flagIsSet(flagSyn) && h.sndWndScale > 0 {
+		h.sndWnd <<= uint8(h.sndWndScale)
+	}
+	log.Println(h.sndWnd)
+
+	switch h.state {
+	case handshakeSynRcvd:
+		// 正常情况下，服务端接收客户端第三次 ack 报文
+		return h.synRcvdState(s)
+	case handshakeSynSent:
+		// 客户端发送了syn报文后的处理
+		return h.synSentState(s)
+	}
+	return nil
+}
+
+// processSegments goes through the segment queue and processes up to
+// maxSegmentsPerWake (if they're available).
+func (h *handshake) processSegments() *tcpip.Error {
+
+	log.Println("处理握手报文")
+	for i := 0; i < maxSegmentsPerWake; i++ {
+		// 从建立中的连接队列里取一个报文段
+		s := h.ep.segmentQueue.dequeue()
+		if s == nil {
+			return nil
+		}
+		err := h.handleSegment(s)
+		if err != nil {
+			return err
+		}
+
+		if h.state == handshakeCompleted {
+			break
+		}
+	}
+	// If the queue is not empty, make sure we'll wake up in the next
+	// iteration.
+	if !h.ep.segmentQueue.empty() {
+		h.ep.newSegmentWaker.Assert()
+	}
+	return nil
+}
+
 // execute executes the TCP 3-way handshake.
 // 执行tcp 3次握手，客户端和服务端都是调用该函数来实现三次握手
 /*
@@ -216,6 +317,9 @@ func (h *handshake) execute() *tcpip.Error {
 
 		case wakerForNewSegment:
 			// 处理握手报文
+			if err := h.processSegments(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -353,8 +457,50 @@ func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.Vectorise
 	return r.WritePacket(hdr, data, ProtocolNumber, ttl)
 }
 
+// 从发送队列中取出数据并发送出去
+func (e *endpoint) handleWrite() *tcpip.Error {
+	return nil
+}
+
+// 关闭连接的处理，最终会调用 sendData 来发送 fin 包
+func (e *endpoint) handleClose() *tcpip.Error {
+	return nil
+}
+
 // handleSegments 从队列中取出 tcp 段数据，然后处理它们。
 func (e *endpoint) handleSegments() *tcpip.Error {
+	log.Println("年轻人的第一条数据")
+	checkRequeue := true
+	for i := 0; i < maxSegmentsPerWake; i++ {
+		s := e.segmentQueue.dequeue()
+		if s == nil {
+			checkRequeue = false
+			break
+		}
+		if s.flagIsSet(flagRst) {
+			// TODO 如果收到 rst 报文
+			s.decRef()
+			return tcpip.ErrConnectionReset
+		} else if s.flagIsSet(flagAck) {
+			// 处理正常报文
+
+			// RFC 793, page 41 states that "once in the ESTABLISHED
+			// state all segments must carry current acknowledgment
+			// information."
+			// 处理tcp数据段，同时给接收器和发送器
+			// 为何要给发送器传接收到的数据段呢？主要是为了滑动窗口的滑动和拥塞控制处理
+			e.rcv.handleRcvdSegment(s)
+			//e.snd.handleRcvdSegment(s)
+		}
+		s.decRef() // 该segment处理完成
+	}
+	// If the queue is not empty, make sure we'll wake up in the next
+	// iteration.
+	if checkRequeue && !e.segmentQueue.empty() {
+		e.newSegmentWaker.Assert()
+	}
+
+	// TODO 需要添加
 	return nil
 }
 
@@ -367,8 +513,14 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 		w *sleep.Waker
 		f func() *tcpip.Error
 	}{
-		{},
-		{},
+		{
+			w: &e.sndWaker,
+			f: e.handleWrite,
+		},
+		{
+			w: &e.sndCloseWaker,
+			f: e.handleClose,
+		},
 		{
 			w: &e.newSegmentWaker,
 			f: e.handleSegments,
@@ -395,7 +547,7 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 		if err := funcs[v].f(); err != nil {
 			e.mu.Lock()
 			//e.resetConnectionLocked(err)
-			//// Lock released below.
+			// Lock released below.
 			//epilogue()
 			log.Println(err)
 			return nil

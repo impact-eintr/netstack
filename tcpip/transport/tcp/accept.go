@@ -12,6 +12,7 @@ import (
 	"netstack/tcpip/header"
 	"netstack/tcpip/seqnum"
 	"netstack/tcpip/stack"
+	"netstack/waiter"
 	"sync"
 	"time"
 )
@@ -246,18 +247,30 @@ func (l *listenContext) createEndpointAndPerformHandshake(s *segment, opts *head
 	return ep, nil
 }
 
+func (e *endpoint) deliverAccepted(n *endpoint) {
+	e.mu.RLock()
+	if e.state == stateListen {
+		e.acceptedChan <- n
+		e.waiterQueue.Notify(waiter.EventIn)
+	} else {
+		n.Close()
+	}
+	e.mu.RUnlock()
+}
+
 // 一旦侦听端点收到SYN段，handleSynSegment就会在其自己的goroutine中调用。它负责完成握手并将新端点排队以进行接受。
 // 在TCP开始使用SYN cookie接受连接之前，允许使用有限数量的这些goroutine。
 func (e *endpoint) handleSynSegment(ctx *listenContext, s *segment, opts *header.TCPSynOptions) {
 	defer decSynRcvdCount()
 	defer s.decRef()
 
-	_, err := ctx.createEndpointAndPerformHandshake(s, opts)
+	// 这里返回的 n 是一个新的tcp端: LAddr:Port+RAddr:RPort
+	n, err := ctx.createEndpointAndPerformHandshake(s, opts)
 	if err != nil {
 		return
 	}
 	// 到这里，三次握手已经完成，那么分发一个新的连接
-	//e.deliverAccepted(n)
+	e.deliverAccepted(n)
 }
 
 // handleListenSegment is called when a listening endpoint receives a segment

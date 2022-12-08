@@ -214,7 +214,7 @@ func (e *endpoint) Listen(backlog int) (err *tcpip.Error) {
 
 	e.stack.Stats().TCP.PassiveConnectionOpenings.Increment()
 	// tcp服务端实现的主循环，这个函数很重要，用一个goroutine来服务
-	go e.protocolListenLoop(seqnum.Size(0))
+	go e.protocolListenLoop(seqnum.Size(e.receiveBufferAvailable()))
 
 	return nil
 }
@@ -239,6 +239,7 @@ func (e *endpoint) Accept() (tcpip.Endpoint, *waiter.Queue, *tcpip.Error) {
 	var n *endpoint
 	select {
 	case n = <-e.acceptedChan:
+		log.Println("监听者进行一个新连接的分发", n.id)
 	default:
 		return nil, nil, tcpip.ErrWouldBlock
 	}
@@ -382,6 +383,25 @@ func (e *endpoint) HandlePacket(r *stack.Route, id stack.TransportEndpointID, vv
 
 func (e *endpoint) HandleControlPacket(id stack.TransportEndpointID, typ stack.ControlType, extra uint32, vv buffer.VectorisedView) {
 
+}
+
+// receiveBufferAvailable calculates how many bytes are still available in the
+// receive buffer.
+// tcp流量控制：计算未被占用的接收缓存大小
+func (e *endpoint) receiveBufferAvailable() int {
+	e.rcvListMu.Lock()
+	size := e.rcvBufSize
+	used := e.rcvBufUsed
+	e.rcvListMu.Unlock()
+
+	// We may use more bytes than the buffer size when the receive buffer
+	// shrinks.
+	if used >= size {
+		return 0
+	}
+
+	log.Println("Init Recv Windeow Size: ", size-used)
+	return size - used
 }
 
 // maybeEnableTimestamp marks the timestamp option enabled for this endpoint if

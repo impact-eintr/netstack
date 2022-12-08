@@ -2,20 +2,25 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"time"
 )
 
 func main() {
 	go func() {
-		_, err := net.Dial("tcp", "192.168.1.1:9999")
+		conn, err := net.Dial("tcp", "192.168.1.1:9999")
 		if err != nil {
 			fmt.Println("err : ", err)
 			return
 		}
+		log.Println("连接建立")
+		conn.Write([]byte("helloworld"))
+		log.Println("发送了数据")
+		conn.Close()
 	}()
 
-	t := time.NewTimer(500 * time.Millisecond)
+	t := time.NewTimer(1000 * time.Millisecond)
 	select {
 	case <-t.C:
 		return
