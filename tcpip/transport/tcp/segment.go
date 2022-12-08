@@ -3,6 +3,7 @@ package tcp
 import (
 	"fmt"
 	"log"
+	"netstack/logger"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/header"
 	"netstack/tcpip/seqnum"
@@ -122,8 +123,10 @@ func (s *segment) parse() bool {
 	s.options = h.Options()
 	s.parsedOptions = header.ParseTCPOptions(s.options)
 
-	log.Println(h)
-	fmt.Println(s.parsedOptions)
+	logger.GetInstance().Info(logger.TCP, func() {
+		log.Println(h)
+		fmt.Println(s.parsedOptions)
+	})
 
 	s.data.TrimFront(offset)
 

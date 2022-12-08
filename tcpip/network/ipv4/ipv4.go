@@ -2,6 +2,7 @@ package ipv4
 
 import (
 	"log"
+	"netstack/logger"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/header"
@@ -129,7 +130,9 @@ func (e *endpoint) HandlePacket(r *stack.Route, vv buffer.VectorisedView) {
 	if !h.IsValid(vv.Size()) {
 		return
 	}
-	log.Println(h)
+	logger.GetInstance().Info(logger.IP, func() {
+		log.Println(h)
+	})
 
 	hlen := int(h.HeaderLength())
 	tlen := int(h.TotalLength())

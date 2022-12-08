@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"netstack/logger"
 	"netstack/tcpip"
 	"netstack/tcpip/link/fdbased"
 	"netstack/tcpip/link/tuntap"
@@ -140,6 +141,7 @@ func main() {
 	//	conn.Close()
 	//}()
 
+	//logger.SetFlags(logger.TCP)
 	go func() { // echo server
 		listener := tcpListen(s, proto, addr, localPort)
 		conn, err := listener.Accept()
@@ -150,7 +152,9 @@ func main() {
 		if _, err := conn.Read(buf); err != nil {
 			log.Fatal(err)
 		}
-		fmt.Println(string(buf))
+		logger.GetInstance().Info(logger.TCP, func() {
+			fmt.Println(string(buf))
+		})
 		if string(buf) != "" {
 			conn.Write([]byte("Server echo"))
 		}
