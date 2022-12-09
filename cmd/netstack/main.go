@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"netstack/logger"
 	"netstack/tcpip"
 	"netstack/tcpip/link/fdbased"
 	"netstack/tcpip/link/tuntap"
@@ -30,6 +31,7 @@ func main() {
 		log.Fatal("Usage: ", os.Args[0], " <tap-device> <local-address/mask> <ip-address> <local-port>")
 	}
 
+	logger.SetFlags(logger.HANDSHAKE)
 	log.SetFlags(log.Lshortfile | log.LstdFlags)
 
 	tapName := flag.Arg(0)
@@ -129,13 +131,16 @@ func main() {
 		if err != nil {
 			log.Println(err)
 		}
-		buf := make([]byte, 1024)
-		if _, err := conn.Read(buf); err != nil {
-			log.Fatal(err)
-		}
-		fmt.Println(string(buf))
-		if string(buf) != "" {
-			conn.Write([]byte("Server echo"))
+
+		for {
+			buf := make([]byte, 1024)
+			if _, err := conn.Read(buf); err != nil {
+				log.Fatal(err)
+			}
+			fmt.Println(string(buf))
+			//if string(buf) != "" {
+			//	conn.Write([]byte("Server echo"))
+			//}
 		}
 		os.Exit(1)
 

@@ -7,6 +7,7 @@ import (
 	"hash"
 	"io"
 	"log"
+	"netstack/logger"
 	"netstack/sleep"
 	"netstack/tcpip"
 	"netstack/tcpip/header"
@@ -220,11 +221,14 @@ func (l *listenContext) createEndpointAndPerformHandshake(s *segment, opts *head
 	// create new endpoint
 	irs := s.sequenceNumber
 	cookie := l.createCookie(s.id, irs, encodeMSS(opts.MSS))
-	log.Println("收到一个远端握手申请", irs, "标记cookie", cookie)
+	logger.GetInstance().Info(logger.HANDSHAKE, func() {
+		log.Println("收到一个远端握手申请", irs, "客户端请携带 标记 iss", cookie)
+	})
 	ep, err := l.createConnectedEndpoint(s, cookie, irs, opts)
 	if err != nil {
 		return nil, err
 	}
+	log.Println("TCP STATE LISTEN")
 
 	// 以下执行三次握手
 
@@ -236,7 +240,9 @@ func (l *listenContext) createEndpointAndPerformHandshake(s *segment, opts *head
 	}
 
 	// 标记状态为 handshakeSynRcvd 和 h.flags为 syn+ack
+	log.Println("TCP STATE SYN_RCVD")
 	h.resetToSynRcvd(cookie, irs, opts)
+	// 发送ack报文 接收client返回的ack
 	if err := h.execute(); err != nil {
 		ep.Close()
 		return nil, err
@@ -337,7 +343,6 @@ func (e *endpoint) protocolListenLoop(rcvWnd seqnum.Size) *tcpip.Error {
 		var index int
 		switch index, _ = s.Fetch(true); index { // Fetch(true) 阻塞获取
 		case wakerForNewSegment:
-			log.Println("你是一个一个新连接")
 			mayRequeue := true
 			// 接收和处理tcp报文
 			for i := 0; i < maxSegmentsPerWake; i++ {
@@ -361,31 +366,4 @@ func (e *endpoint) protocolListenLoop(rcvWnd seqnum.Size) *tcpip.Error {
 			panic((nil))
 		}
 	}
-}
-
-// tcpTimeStamp returns a timestamp offset by the provided offset. This is
-// not inlined above as it's used when SYN cookies are in use and endpoint
-// is not created at the time when the SYN cookie is sent.
-func tcpTimeStamp(offset uint32) uint32 {
-	now := time.Now()
-	return uint32(now.Unix()*1000+int64(now.Nanosecond()/1e6)) + offset
-}
-
-// timeStampOffset returns a randomized timestamp offset to be used when sending
-// timestamp values in a timestamp option for a TCP segment.
-func timeStampOffset() uint32 {
-	b := make([]byte, 4)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	// Initialize a random tsOffset that will be added to the recentTS
-	// everytime the timestamp is sent when the Timestamp option is enabled.
-	//
-	// See https://tools.ietf.org/html/rfc7323#section-5.4 for details on
-	// why this is required.
-	//
-	// NOTE: This is not completely to spec as normally this should be
-	// initialized in a manner analogous to how sequence numbers are
-	// randomized per connection basis. But for now this is sufficient.
-	return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
 }

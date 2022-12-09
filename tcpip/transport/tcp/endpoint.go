@@ -1,8 +1,10 @@
 package tcp
 
 import (
+	"crypto/rand"
 	"fmt"
 	"log"
+	"netstack/logger"
 	"netstack/sleep"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
@@ -12,6 +14,7 @@ import (
 	"netstack/tmutex"
 	"netstack/waiter"
 	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -81,6 +84,10 @@ type endpoint struct {
 	// updated if required when a new segment is received by this endpoint.
 	recentTS uint32
 
+	// tsOffset is a randomized offset added to the value of the
+	// TSVal field in the timestamp option.
+	tsOffset uint32
+
 	// sackPermitted is set to true if the peer sends the TCPSACKPermitted
 	// option in the SYN/SYN-ACK.
 	sackPermitted bool
@@ -134,6 +141,7 @@ func newEndpoint(stack *stack.Stack, netProto tcpip.NetworkProtocolNumber, waite
 	e.segmentQueue.setLimit(2 * e.rcvBufSize)
 	e.workMu.Init()
 	e.workMu.Lock()
+	e.tsOffset = timeStampOffset() // 随机偏移
 	return e
 }
 
@@ -180,13 +188,35 @@ func (e *endpoint) readLocked() (buffer.View, *tcpip.Error) {
 		e.rcvList.Remove(s)
 		s.decRef()
 	}
-	log.Println("读到了数据", views, v)
+	logger.GetInstance().Info(logger.TCP, func() {
+		log.Println("读到了数据", views, v)
+	})
 	// TODO 流量检测
+	e.rcvBufUsed -= len(v)
 
 	return v, nil
 }
 
-func (e *endpoint) Write(tcpip.Payload, tcpip.WriteOptions) (uintptr, <-chan struct{}, *tcpip.Error) {
+// Write 接收上层的数据，通过tcp连接发送到对端
+func (e *endpoint) Write(p tcpip.Payload, opts tcpip.WriteOptions) (uintptr, <-chan struct{}, *tcpip.Error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	// 判断tcp状态，必须已经建立了连接才能发送数据
+	if e.state != stateConnected {
+		switch e.state {
+		case stateError:
+			return 0, nil, e.hardError
+		default:
+			return 0, nil, tcpip.ErrClosedForSend
+		}
+	}
+	// 检查负载的长度，如果为0，直接返回
+	if p.Size() == 0 {
+		return 0, nil, nil
+	}
+	e.sndBufMu.Lock()
+	e.sndBufMu.Unlock()
+
 	return 0, nil, nil
 }
 
@@ -391,7 +421,9 @@ func (e *endpoint) Accept() (tcpip.Endpoint, *waiter.Queue, *tcpip.Error) {
 	var n *endpoint
 	select {
 	case n = <-e.acceptedChan: // 外部再次调用后尝试取出ep
-		log.Println("监听者进行一个新连接的分发", n.id)
+		logger.GetInstance().Info(logger.TCP, func() {
+			log.Println("监听者进行一个新连接的分发", n.id)
+		})
 	default:
 		return nil, nil, tcpip.ErrWouldBlock
 	}
@@ -563,9 +595,16 @@ func (e *endpoint) HandlePacket(r *stack.Route, id stack.TransportEndpointID, vv
 	}
 	// Send packet to worker goroutine.
 	if e.segmentQueue.enqueue(s) {
-		log.Printf("收到 tcp [%s] 报文片段 from %s, seq: %d, ack: %d",
+		var prifix string = "tcp连接"
+		if _, err := e.GetRemoteAddress(); err != nil {
+			prifix = "监听者"
+		}
+		log.Printf(prifix+"收到 tcp [%s] 报文片段 from %s, seq: %d, ack: %d",
 			flagString(s.flags), fmt.Sprintf("%s:%d", s.id.RemoteAddress, s.id.RemotePort),
 			s.sequenceNumber, s.ackNumber)
+
+		// 对于 端口监听者 listener 而言这里唤醒的是 protocolListenLoop
+		// 对于普通tcp连接 conn 而言这里唤醒的是 protocolMainLoop
 		e.newSegmentWaker.Assert()
 	} else {
 		// The queue is full, so we drop the segment.
@@ -619,6 +658,39 @@ func (e *endpoint) maybeEnableTimestamp(synOpts *header.TCPSynOptions) {
 		e.sendTSOk = true
 		e.recentTS = synOpts.TSVal
 	}
+}
+
+// timestamp returns the timestamp value to be used in the TSVal field of the
+// timestamp option for outgoing TCP segments for a given endpoint.
+func (e *endpoint) timestamp() uint32 {
+	return tcpTimeStamp(e.tsOffset)
+}
+
+// tcpTimeStamp returns a timestamp offset by the provided offset. This is
+// not inlined above as it's used when SYN cookies are in use and endpoint
+// is not created at the time when the SYN cookie is sent.
+func tcpTimeStamp(offset uint32) uint32 {
+	now := time.Now()
+	return uint32(now.Unix()*1000+int64(now.Nanosecond()/1e6)) + offset
+}
+
+// timeStampOffset returns a randomized timestamp offset to be used when sending
+// timestamp values in a timestamp option for a TCP segment.
+func timeStampOffset() uint32 {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	// Initialize a random tsOffset that will be added to the recentTS
+	// everytime the timestamp is sent when the Timestamp option is enabled.
+	//
+	// See https://tools.ietf.org/html/rfc7323#section-5.4 for details on
+	// why this is required.
+	//
+	// NOTE: This is not completely to spec as normally this should be
+	// initialized in a manner analogous to how sequence numbers are
+	// randomized per connection basis. But for now this is sufficient.
+	return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
 }
 
 // maybeEnableSACKPermitted marks the SACKPermitted option enabled for this endpoint

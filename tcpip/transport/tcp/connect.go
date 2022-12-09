@@ -117,6 +117,7 @@ func (h *handshake) resetToSynRcvd(iss seqnum.Value, irs seqnum.Value, opts *hea
 	h.sndWndScale = opts.WS
 }
 
+// TODO 处理tcp路由
 func (h *handshake) resolveRoute() *tcpip.Error {
 	// Set up the wakers.
 	s := sleep.Sleeper{}
@@ -201,6 +202,7 @@ func (h *handshake) synRcvdState(s *segment) *tcpip.Error {
 
 	// 如果时ack报文 表示三次握手已经完成
 	if s.flagIsSet(flagAck) {
+		log.Println("TCP STATE ESTABLISHED")
 		// TODO 修改时间戳
 		h.state = handshakeCompleted
 		return nil
@@ -215,7 +217,6 @@ func (h *handshake) handleSegment(s *segment) *tcpip.Error {
 	if !s.flagIsSet(flagSyn) && h.sndWndScale > 0 {
 		h.sndWnd <<= uint8(h.sndWndScale)
 	}
-	//log.Println(h.sndWnd)
 
 	switch h.state {
 	case handshakeSynRcvd:
@@ -231,8 +232,6 @@ func (h *handshake) handleSegment(s *segment) *tcpip.Error {
 // processSegments goes through the segment queue and processes up to
 // maxSegmentsPerWake (if they're available).
 func (h *handshake) processSegments() *tcpip.Error {
-
-	log.Println("处理握手报文")
 	for i := 0; i < maxSegmentsPerWake; i++ {
 		// 从建立中的连接队列里取一个报文段
 		s := h.ep.segmentQueue.dequeue()
@@ -456,6 +455,57 @@ func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.Vectorise
 	return r.WritePacket(hdr, data, ProtocolNumber, ttl)
 }
 
+// makeOptions makes an options slice.
+func (e *endpoint) makeOptions(sackBlocks []header.SACKBlock) []byte {
+	options := getOptions()
+	offset := 0
+
+	// N.B. the ordering here matches the ordering used by Linux internally
+	// and described in the raw makeOptions function. We don't include
+	// unnecessary cases here (post connection.)
+	if e.sendTSOk {
+		// Embed the timestamp if timestamp has been enabled.
+		//
+		// We only use the lower 32 bits of the unix time in
+		// milliseconds. This is similar to what Linux does where it
+		// uses the lower 32 bits of the jiffies value in the tsVal
+		// field of the timestamp option.
+		//
+		// Further, RFC7323 section-5.4 recommends millisecond
+		// resolution as the lowest recommended resolution for the
+		// timestamp clock.
+		//
+		// Ref: https://tools.ietf.org/html/rfc7323#section-5.4.
+		offset += header.EncodeNOP(options[offset:])
+		offset += header.EncodeNOP(options[offset:])
+		offset += header.EncodeTSOption(e.timestamp(), uint32(e.recentTS), options[offset:])
+	}
+	if e.sackPermitted && len(sackBlocks) > 0 {
+		offset += header.EncodeNOP(options[offset:])
+		offset += header.EncodeNOP(options[offset:])
+		offset += header.EncodeSACKBlocks(sackBlocks, options[offset:])
+	}
+
+	// We expect the above to produce an aligned offset.
+	if delta := header.AddTCPOptionPadding(options, offset); delta != 0 {
+		panic("unexpected option encoding")
+	}
+
+	return options[:offset]
+}
+
+func (e *endpoint) sendRaw(data buffer.VectorisedView, flags byte, seq, ack seqnum.Value, rcvWnd seqnum.Size) *tcpip.Error {
+	var sackBlocks []header.SACKBlock
+	// TODO 填充配置
+	//if e.state == stateConnected && e.rcv.pendingBufSize > 0 && (flags&flagAck != 0) {
+	//	sackBlocks = e.sack.Blocks[:e.sack.NumBlocks]
+	//}
+	options := e.makeOptions(sackBlocks)
+	err := sendTCP(&e.route, e.id, data, e.route.DefaultTTL(), flags, seq, ack, rcvWnd, options)
+	putOptions(options)
+	return err
+}
+
 // 从发送队列中取出数据并发送出去
 func (e *endpoint) handleWrite() *tcpip.Error {
 	return nil
@@ -468,7 +518,6 @@ func (e *endpoint) handleClose() *tcpip.Error {
 
 // handleSegments 从队列中取出 tcp 段数据，然后处理它们。
 func (e *endpoint) handleSegments() *tcpip.Error {
-	//log.Println("年轻人的第一条数据")
 	checkRequeue := true
 	for i := 0; i < maxSegmentsPerWake; i++ {
 		s := e.segmentQueue.dequeue()

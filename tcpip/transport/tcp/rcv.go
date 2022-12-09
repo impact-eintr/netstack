@@ -2,20 +2,31 @@ package tcp
 
 import (
 	"log"
+	"netstack/logger"
 	"netstack/tcpip/seqnum"
 )
 
 type receiver struct {
 	ep     *endpoint
 	rcvNxt seqnum.Value // 准备接收的下一个报文序列号
+
+	// rcvAcc 超出了最后一个可接受的序列号。也就是说，接收方向其同行宣布它愿意接受的“最大”序列值。
+	// 如果接收窗口减少，这可能与rcvNxt + rcvWnd不同;在这种情况下，我们必须减少窗口，因为我们收到更多数据而不是缩小它。
+	rcvAcc      seqnum.Value
+	rcvWndScale uint8
+
 	closed bool
+
+	// TODO 需要添加
 }
 
 // 新建并初始化接收器
 func newReceiver(ep *endpoint, irs seqnum.Value, rcvWnd seqnum.Size, rcvWndScale uint8) *receiver {
 	r := &receiver{
-		ep:     ep,
-		rcvNxt: irs + 1,
+		ep:          ep,
+		rcvNxt:      irs + 1,
+		rcvAcc:      irs.Add(rcvWnd + 1),
+		rcvWndScale: rcvWndScale,
 	}
 	return r
 }
@@ -24,6 +35,21 @@ func newReceiver(ep *endpoint, irs seqnum.Value, rcvWnd seqnum.Size, rcvWndScale
 func (r *receiver) acceptable(segSeq seqnum.Value, segLen seqnum.Size) bool {
 	// TODO 流量控制
 	return true
+}
+
+// getSendParams returns the parameters needed by the sender when building
+// segments to send.
+// getSendParams 在构建要发送的段时，返回发送方所需的参数。
+// 并且更新接收窗口的指标 rcvAcc
+func (r *receiver) getSendParams() (rcvNxt seqnum.Value, rcvWnd seqnum.Size) {
+	// Calculate the window size based on the current buffer size.
+	n := r.ep.receiveBufferAvailable()
+	acc := r.rcvNxt.Add(seqnum.Size(n))
+	if r.rcvAcc.LessThan(acc) {
+		r.rcvAcc = acc
+	}
+
+	return r.rcvNxt, r.rcvNxt.Size(r.rcvAcc) >> r.rcvWndScale
 }
 
 func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum.Size) bool {
@@ -48,9 +74,19 @@ func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum
 		return false
 	}
 
+	// 因为前面已经收到正确按序到达的数据，那么我们应该更新一下我们期望下次收到的序列号了
+	r.rcvNxt = segSeq.Add(segLen)
+	logger.GetInstance().Info(logger.TCP, func() {
+	})
+	log.Println("下一个期望接收的字节序列号", r.rcvNxt)
+
 	// 如果收到 fin 报文
 	if s.flagIsSet(flagFin) {
-		// TODO 处理fin报文
+		// 控制报文消耗一个字节的序列号，因此这边期望下次收到的序列号加1
+		r.rcvNxt++
+
+		// 收到 fin，立即回复 ack
+		r.ep.snd.sendAck()
 	}
 
 	return true
