@@ -2,6 +2,7 @@ package stack
 
 import (
 	"log"
+	"netstack/logger"
 	"netstack/sleep"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
@@ -389,7 +390,9 @@ func (s *Stack) FindRoute(id tcpip.NICID, localAddr, remoteAddr tcpip.Address,
 
 		r := makeRoute(netProto, ref.ep.ID().LocalAddress, remoteAddr, nic.linkEP.LinkAddress(), ref)
 		r.NextHop = s.routeTable[i].Gateway
-		log.Println(r.LocalLinkAddress, r.LocalAddress, r.RemoteLinkAddress, r.RemoteAddress, r.NextHop)
+		logger.GetInstance().Info(logger.IP, func() {
+			log.Println(r.LocalLinkAddress, r.LocalAddress, r.RemoteLinkAddress, r.RemoteAddress, r.NextHop)
+		})
 		return r, nil
 	}
 
@@ -466,7 +469,9 @@ func (s *Stack) RemoveWaker(nicid tcpip.NICID, addr tcpip.Address, waker *sleep.
 // 最终调用 demuxer.registerEndpoint 函数来实现注册。
 func (s *Stack) RegisterTransportEndpoint(nicID tcpip.NICID, netProtos []tcpip.NetworkProtocolNumber,
 	protocol tcpip.TransportProtocolNumber, id TransportEndpointID, ep TransportEndpoint) *tcpip.Error {
-	log.Println("往", nicID, "网卡注册新的传输端")
+	logger.GetInstance().Info(logger.UDP|logger.TCP, func() {
+		log.Println("往", nicID, "网卡注册新的传输端")
+	})
 	if nicID == 0 {
 		return s.demux.registerEndpoint(netProtos, protocol, id, ep) // 给协议栈的所有网卡注册传输端
 	}

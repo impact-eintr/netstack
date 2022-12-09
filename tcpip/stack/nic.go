@@ -3,6 +3,7 @@ package stack
 import (
 	"log"
 	"netstack/ilist"
+	"netstack/logger"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/header"
@@ -92,7 +93,6 @@ func (n *NIC) addAddressLocked(protocol tcpip.NetworkProtocolNumber, addr tcpip.
 	peb PrimaryEndpointBehavior, replace bool) (*referencedNetworkEndpoint, *tcpip.Error) {
 	netProto, ok := n.stack.networkProtocols[protocol]
 	if !ok {
-		log.Println("添加失败")
 		return nil, tcpip.ErrUnknownProtocol
 	}
 
@@ -101,7 +101,9 @@ func (n *NIC) addAddressLocked(protocol tcpip.NetworkProtocolNumber, addr tcpip.
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("基于[%d]协议 为 #%d 网卡 添加网络层实现 并绑定地址到: %s\n", netProto.Number(), n.id, ep.ID().LocalAddress)
+	logger.GetInstance().Info(logger.IP, func() {
+		log.Printf("基于[%d]协议 为 #%d 网卡 添加网络层实现 并绑定地址到: %s\n", netProto.Number(), n.id, ep.ID().LocalAddress)
+	})
 
 	// 获取网络层端的id 其实就是ip地址
 	id := *ep.ID()
@@ -340,19 +342,23 @@ func (n *NIC) DeliverNetworkPacket(linkEP LinkEndpoint, remoteLinkAddr, localLin
 		return
 	}
 	src, dst := netProto.ParseAddresses(vv.First())
-	log.Printf("网卡[%v]准备从 [%s] 向 [%s] 分发数据: %v\n", linkEP.LinkAddress(), src, dst, func() []byte {
-		if len(vv.ToView()) > 64 {
-			return vv.ToView()[:64]
-		}
-		return vv.ToView()
-	}())
+	logger.GetInstance().Info(logger.ETH, func() {
+		log.Printf("网卡[%v]准备从 [%s] 向 [%s] 分发数据: %v\n", linkEP.LinkAddress(), src, dst, func() []byte {
+			if len(vv.ToView()) > 64 {
+				return vv.ToView()[:64]
+			}
+			return vv.ToView()
+		}())
+	})
 	// 根据网络协议和数据包的目的地址，找到网络端
 	// 然后将数据包分发给网络层
 	if ref := n.getRef(protocol, dst); ref != nil {
 		r := makeRoute(protocol, dst, src, linkEP.LinkAddress(), ref)
 		r.RemoteLinkAddress = remoteLinkAddr
-		log.Println("准备前往 IP 将本地和远端的MAC、IP 保存在路由中 以便协议栈使用",
-			r.LocalLinkAddress, r.RemoteLinkAddress, r.LocalAddress, r.RemoteAddress)
+		logger.GetInstance().Info(logger.ETH, func() {
+			log.Println("准备前往 IP 将本地和远端的MAC、IP 保存在路由中 以便协议栈使用",
+				r.LocalLinkAddress, r.RemoteLinkAddress, r.LocalAddress, r.RemoteAddress)
+		})
 		ref.ep.HandlePacket(&r, vv)
 		ref.decRef()
 		return
@@ -396,7 +402,9 @@ func (n *NIC) getRef(protocol tcpip.NetworkProtocolNumber, dst tcpip.Address) *r
 
 	n.mu.RLock()
 	if ref, ok := n.endpoints[id]; ok && ref.tryIncRef() {
-		log.Println("找到了目标网络端(绑定过的IP): ", id.LocalAddress)
+		logger.GetInstance().Info(logger.IP, func() {
+			log.Println("找到了目标网络端(绑定过的IP): ", id.LocalAddress)
+		})
 		n.mu.RUnlock()
 		return ref
 	}
@@ -453,7 +461,9 @@ func (n *NIC) DeliverTransportPacket(r *Route, protocol tcpip.TransportProtocolN
 		n.stack.stats.MalformedRcvdPackets.Increment()
 		return
 	}
-	log.Println("网卡准备分发传输层数据报", n.stack.transportProtocols, srcPort, dstPort)
+	logger.GetInstance().Info(logger.IP, func() {
+		log.Println("网卡准备分发传输层数据报", n.stack.transportProtocols, srcPort, dstPort)
+	})
 	id := TransportEndpointID{dstPort, r.LocalAddress, srcPort, r.RemoteAddress}
 	// 调用分流器，根据传输层协议和传输层id分发数据报文
 	if n.demux.deliverPacket(r, protocol, vv, id) {
@@ -484,6 +494,7 @@ func (n *NIC) DeliverTransportControlPacket(local, remote tcpip.Address, net tcp
 
 }
 
+// ID 网卡的标识号
 func (n *NIC) ID() tcpip.NICID {
 	return n.id
 }

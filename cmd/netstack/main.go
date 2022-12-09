@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"netstack/logger"
 	"netstack/tcpip"
 	"netstack/tcpip/link/fdbased"
 	"netstack/tcpip/link/tuntap"
@@ -123,24 +122,6 @@ func main() {
 		},
 	})
 
-	//go func() { // echo server
-	//	// 监听udp localPort端口
-	//	conn := udpListen(s, proto, addr, localPort)
-
-	//	for {
-	//		buf := make([]byte, 1024)
-	//		n, err := conn.Read(buf)
-	//		if err != nil {
-	//			log.Println(err)
-	//			break
-	//		}
-	//		log.Println("接收到数据", string(buf[:n]))
-	//		conn.Write([]byte("server echo"))
-	//	}
-	//	// 关闭监听服务，此时会释放端口
-	//	conn.Close()
-	//}()
-
 	//logger.SetFlags(logger.TCP)
 	go func() { // echo server
 		listener := tcpListen(s, proto, addr, localPort)
@@ -152,9 +133,7 @@ func main() {
 		if _, err := conn.Read(buf); err != nil {
 			log.Fatal(err)
 		}
-		logger.GetInstance().Info(logger.TCP, func() {
-			fmt.Println(string(buf))
-		})
+		fmt.Println(string(buf))
 		if string(buf) != "" {
 			conn.Write([]byte("Server echo"))
 		}

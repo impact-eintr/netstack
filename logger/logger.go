@@ -4,10 +4,23 @@ import (
 	"sync"
 )
 
+/*
+logger.GetInstance(IP|TCP)
+
+logger.GetInstance().Info(logger.IP, msg) // 会输出
+
+logger.GetInstance().Info(logger.UDP, msg) // 不会输出
+*/
+
 const (
-	IP = 1 << iota
+	// ETH 以太网
+	ETH = 1 << iota
+	IP
+	ARP
 	UDP
 	TCP
+	// HANDSHAKE 三次握手 四次挥手
+	HANDSHAKE
 )
 
 type logger struct {
@@ -31,16 +44,6 @@ func GetInstance() *logger {
 func SetFlags(flags uint8) {
 	GetInstance().flags = flags
 }
-
-/*
-logger.GetInstance(IP|TCP)
-
-logger.GetInstance().Info(logger.IP, msg) // 会输出
-
-logger.GetInstance().Info(logger.UDP, msg) // 不会输出
-
-
-*/
 
 func (l *logger) Info(mask uint8, f func()) {
 	if mask&l.flags != 0 {

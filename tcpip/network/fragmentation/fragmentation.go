@@ -2,6 +2,7 @@ package fragmentation
 
 import (
 	"log"
+	"netstack/logger"
 	"netstack/tcpip/buffer"
 	"sync"
 	"time"
@@ -71,7 +72,9 @@ func (f *Fragmentation) Process(id uint32, first, last uint16, more bool, vv buf
 
 	f.mu.Lock()
 	f.size += consumed
-	log.Printf("[%d]的分片 [%d,%d] 合并中\n", id, first, last)
+	logger.GetInstance().Info(logger.IP, func() {
+		log.Printf("[%d]的分片 [%d,%d] 合并中\n", id, first, last)
+	})
 	if done {
 		f.release(r)
 	}

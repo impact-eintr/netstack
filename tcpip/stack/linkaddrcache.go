@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"netstack/logger"
 	"netstack/sleep"
 	"netstack/tcpip"
 )
@@ -149,7 +150,9 @@ func (e *linkAddrEntry) removeWaker(w *sleep.Waker) {
 
 // add adds a k -> v mapping to the cache.
 func (c *linkAddrCache) add(k tcpip.FullAddress, v tcpip.LinkAddress) {
-	log.Printf("add link cache: %v-%v", k, v)
+	logger.GetInstance().Info(logger.ETH, func() {
+		log.Printf("add link cache: %v-%v", k, v)
+	})
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -203,7 +206,9 @@ func (c *linkAddrCache) makeAndAddEntry(k tcpip.FullAddress, v tcpip.LinkAddress
 // get reports any known link address for k.
 func (c *linkAddrCache) get(k tcpip.FullAddress, linkRes LinkAddressResolver,
 	localAddr tcpip.Address, linkEP LinkEndpoint, waker *sleep.Waker) (tcpip.LinkAddress, <-chan struct{}, *tcpip.Error) {
-	log.Println("在arp本地缓存中寻找", k)
+	logger.GetInstance().Info(logger.ETH, func() {
+		log.Println("在arp本地缓存中寻找", k)
+	})
 	if linkRes != nil {
 		if addr, ok := linkRes.ResolveStaticAddress(k.Addr); ok {
 			return addr, nil, nil
