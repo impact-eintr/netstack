@@ -95,11 +95,11 @@ func (h *handshake) resetState() *tcpip.Error {
 	}
 	// 初始化状态为 SynSent
 	h.state = handshakeSynSent
-	log.Println("收到 syn 同步报文 设置tcp状态为 [sent]")
 	h.flags = flagSyn
 	h.ackNum = 0
 	h.mss = 0
 	h.iss = seqnum.Value(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
+	log.Println("收到 syn 同步报文 设置tcp状态为 [sent]")
 
 	return nil
 }
@@ -109,7 +109,6 @@ func (h *handshake) resetState() *tcpip.Error {
 func (h *handshake) resetToSynRcvd(iss seqnum.Value, irs seqnum.Value, opts *header.TCPSynOptions) {
 	h.active = false
 	h.state = handshakeSynRcvd
-	log.Println("发送 syn|ack 确认报文 设置tcp状态为 [rcvd]")
 	h.flags = flagSyn | flagAck
 	h.iss = iss
 	h.ackNum = irs + 1 // NOTE ACK = synNum + 1
@@ -448,7 +447,7 @@ func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.Vectorise
 		r.Stats().TCP.ResetsSent.Increment()
 	}
 
-	log.Printf("send tcp %s segment to %s, seq: %d, ack: %d, rcvWnd: %d",
+	log.Printf("send tcp %s segment to %s, seq: |%d|, ack: %d, rcvWnd: %d",
 		flagString(flags), fmt.Sprintf("%s:%d", id.RemoteAddress, id.RemotePort),
 		seq, ack, rcvWnd)
 
@@ -538,7 +537,7 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 			// 处理tcp数据段，同时给接收器和发送器
 			// 为何要给发送器传接收到的数据段呢？主要是为了滑动窗口的滑动和拥塞控制处理
 			e.rcv.handleRcvdSegment(s)
-			//e.snd.handleRcvdSegment(s)
+			e.snd.handleRcvdSegment(s)
 		}
 		s.decRef() // 该segment处理完成
 	}

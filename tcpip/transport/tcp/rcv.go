@@ -24,7 +24,7 @@ type receiver struct {
 func newReceiver(ep *endpoint, irs seqnum.Value, rcvWnd seqnum.Size, rcvWndScale uint8) *receiver {
 	r := &receiver{
 		ep:          ep,
-		rcvNxt:      irs + 1,
+		rcvNxt:      irs + 1, // 成功建立连接后期望读取的第一个字节序号
 		rcvAcc:      irs.Add(rcvWnd + 1),
 		rcvWndScale: rcvWndScale,
 	}
@@ -78,7 +78,6 @@ func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum
 	r.rcvNxt = segSeq.Add(segLen)
 	logger.GetInstance().Info(logger.TCP, func() {
 	})
-	log.Println("下一个期望接收的字节序列号", r.rcvNxt)
 
 	// 如果收到 fin 报文
 	if s.flagIsSet(flagFin) {
@@ -86,7 +85,7 @@ func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum
 		r.rcvNxt++
 
 		// 收到 fin，立即回复 ack
-		r.ep.snd.sendAck()
+		r.ep.snd.sendAck() // FIXME 不应该是 seq+2 捏
 	}
 
 	return true

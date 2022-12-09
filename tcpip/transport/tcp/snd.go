@@ -1,6 +1,7 @@
 package tcp
 
 import (
+	"log"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/seqnum"
@@ -66,7 +67,9 @@ func newSender(ep *endpoint, iss, irs seqnum.Value, sndWnd seqnum.Size, mss uint
 }
 
 func (s *sender) sendAck() {
-	s.sendSegment(buffer.VectorisedView{}, flagAck, s.sndNxt)
+	log.Println("发送字节序", s.sndNxt)
+	s.sendSegment(buffer.VectorisedView{}, flagAck, s.sndNxt) // seq = cookies+1 ack ack|fin.seq+1
+	s.sendSegment(buffer.VectorisedView{}, flagFin, 0)
 }
 
 // sendSegment sends a new segment containing the given payload, flags and
@@ -84,4 +87,16 @@ func (s *sender) sendSegment(data buffer.VectorisedView, flags byte, seq seqnum.
 	s.maxSentAck = rcvNxt
 
 	return s.ep.sendRaw(data, flags, seq, rcvNxt, rcvWnd)
+}
+
+// 收到段时调用 handleRcvdSegment 它负责更新与发送相关的状态
+func (s *sender) handleRcvdSegment(seg *segment) {
+	// 现在某些待处理数据已被确认，或者窗口打开，或者由于快速恢复期间出现重复的ack而导致拥塞窗口膨胀，
+	// 因此发送更多数据。如果需要，这也将重新启用重传计时器。
+	s.sendData()
+}
+
+// 发送数据段，最终调用 sendSegment 来发送
+func (s *sender) sendData() {
+
 }

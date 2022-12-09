@@ -222,7 +222,7 @@ func (l *listenContext) createEndpointAndPerformHandshake(s *segment, opts *head
 	irs := s.sequenceNumber
 	cookie := l.createCookie(s.id, irs, encodeMSS(opts.MSS))
 	logger.GetInstance().Info(logger.HANDSHAKE, func() {
-		log.Println("收到一个远端握手申请", irs, "客户端请携带 标记 iss", cookie)
+		log.Println("收到一个远端握手申请 SYN seq=", irs, "客户端请携带 标记 iss ", cookie, "+1")
 	})
 	ep, err := l.createConnectedEndpoint(s, cookie, irs, opts)
 	if err != nil {

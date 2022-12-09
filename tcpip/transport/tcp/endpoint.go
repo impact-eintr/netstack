@@ -599,7 +599,7 @@ func (e *endpoint) HandlePacket(r *stack.Route, id stack.TransportEndpointID, vv
 		if _, err := e.GetRemoteAddress(); err != nil {
 			prifix = "监听者"
 		}
-		log.Printf(prifix+"收到 tcp [%s] 报文片段 from %s, seq: %d, ack: %d",
+		log.Printf(prifix+"收到 tcp [%s] 报文片段 from %s, seq: %d, ack: |%d|",
 			flagString(s.flags), fmt.Sprintf("%s:%d", s.id.RemoteAddress, s.id.RemotePort),
 			s.sequenceNumber, s.ackNumber)
 
