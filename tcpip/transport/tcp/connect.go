@@ -11,8 +11,10 @@ import (
 	"netstack/tcpip/header"
 	"netstack/tcpip/seqnum"
 	"netstack/tcpip/stack"
+	"netstack/waiter"
 	"sync"
 	"time"
+	"unsafe"
 )
 
 const maxSegmentsPerWake = 100
@@ -108,6 +110,16 @@ func (h *handshake) resetState() *tcpip.Error {
 	return nil
 }
 
+// effectiveRcvWndScale returns the effective receive window scale to be used.
+// If the peer doesn't support window scaling, the effective rcv wnd scale is
+// zero; otherwise it's the value calculated based on the initial rcv wnd.
+func (h *handshake) effectiveRcvWndScale() uint8 {
+	if h.sndWndScale < 0 {
+		return 0
+	}
+	return uint8(h.rcvWndScale)
+}
+
 // resetToSynRcvd resets the state of the handshake object to the SYN-RCVD
 // state.
 func (h *handshake) resetToSynRcvd(iss seqnum.Value, irs seqnum.Value, opts *header.TCPSynOptions) {
@@ -180,7 +192,74 @@ func (h *handshake) checkAck(s *segment) bool {
 // synSentState 是客户端或者服务端接收到第一个握手报文的处理
 // 正常情况下，如果是客户端，此时应该收到 syn+ack 报文，处理后发送 ack 报文给服务端。
 // 如果是服务端，此时接收到syn报文，那么应该回复 syn+ack 报文给客户端，并设置状态为 handshakeSynRcvd。
+// NOTE 为什么这里服务端又一次实现发送 syn|ack 是为了处理普通tcp连接收到 syn 报文的异常情况
+// 比如第一次监听者收到syn并发送syn|ack后并没有收到返回 客户端
 func (h *handshake) synSentState(s *segment) *tcpip.Error {
+	log.Println("客户端收到了 syn|ack segment")
+	// RFC 793, page 37, states that in the SYN-SENT state, a reset is
+	// acceptable if the ack field acknowledges the SYN.
+	if s.flagIsSet(flagRst) {
+		if s.flagIsSet(flagAck) && s.ackNumber == h.iss+1 {
+			return tcpip.ErrConnectionRefused
+		}
+		return nil
+	}
+
+	if !h.checkAck(s) {
+		return nil
+	}
+
+	// We are in the SYN-SENT state. We only care about segments that have
+	// the SYN flag.
+	if !s.flagIsSet(flagSyn) {
+		return nil
+	}
+
+	// Parse the SYN options.
+	rcvSynOpts := parseSynSegmentOptions(s)
+
+	// Remember if the Timestamp option was negotiated.
+	h.ep.maybeEnableTimestamp(&rcvSynOpts)
+
+	// Remember if the SACKPermitted option was negotiated.
+	h.ep.maybeEnableSACKPermitted(&rcvSynOpts)
+
+	// Remember the sequence we'll ack from now on.
+	h.ackNum = s.sequenceNumber + 1
+	h.flags |= flagAck
+	h.mss = rcvSynOpts.MSS
+	h.sndWndScale = rcvSynOpts.WS
+
+	// If this is a SYN ACK response, we only need to acknowledge the SYN
+	// and the handshake is completed.
+	// 客户端接收到了 syn+ack 报文
+	if s.flagIsSet(flagAck) {
+		// 客户端握手完成，发送 ack 报文给服务端
+		h.state = handshakeCompleted
+		// 最后依次 ack 报文丢了也没关系，因为后面一但发送任何数据包都是带ack的
+		h.ep.sendRaw(buffer.VectorisedView{}, flagAck, h.iss+1, h.ackNum, h.rcvWnd>>h.effectiveRcvWndScale())
+		return nil
+	}
+
+	// A SYN segment was received, but no ACK in it. We acknowledge the SYN
+	// but resend our own SYN and wait for it to be acknowledged in the
+	// SYN-RCVD state.
+	// 服务端收到了 syn 报文，应该回复客户端 syn+ack 报文，且设置状态为 handshakeSynRcvd
+	h.state = handshakeSynRcvd
+	synOpts := header.TCPSynOptions{
+		WS:    h.rcvWndScale,
+		TS:    rcvSynOpts.TS,
+		TSVal: h.ep.timestamp(),
+		TSEcr: h.ep.recentTS,
+
+		// We only send SACKPermitted if the other side indicated it
+		// permits SACK. This is not explicitly defined in the RFC but
+		// this is the behaviour implemented by Linux.
+		SACKPermitted: rcvSynOpts.SACKPermitted,
+	}
+	// 发送 syn+ack 报文，如果该报文在链路中丢了，没有关系，客户端会重新发送 syn 报文
+	sendSynTCP(&s.route, h.ep.id, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
+
 	return nil
 }
 
@@ -190,6 +269,11 @@ func (h *handshake) synSentState(s *segment) *tcpip.Error {
 func (h *handshake) synRcvdState(s *segment) *tcpip.Error {
 	if s.flagIsSet(flagRst) {
 		// TODO 需要根据窗口返回 等理解了窗口后再写
+		// RFC 793, page 37, states that in the SYN-RCVD state, a reset
+		// is acceptable if the sequence number is in the window.
+		if s.sequenceNumber.InWindow(h.ackNum, h.rcvWnd) {
+			return tcpip.ErrConnectionRefused
+		}
 		return nil
 	}
 	// 校验ack报文
@@ -506,6 +590,7 @@ func (e *endpoint) sendRaw(data buffer.VectorisedView, flags byte, seq, ack seqn
 	//	sackBlocks = e.sack.Blocks[:e.sack.NumBlocks]
 	//}
 	options := e.makeOptions(sackBlocks)
+	log.Println(unsafe.Pointer(e), "怎么又调用了一次 handleWrite!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 	err := sendTCP(&e.route, e.id, data, e.route.DefaultTTL(), flags, seq, ack, rcvWnd, options)
 	putOptions(options)
 	return err
@@ -513,16 +598,50 @@ func (e *endpoint) sendRaw(data buffer.VectorisedView, flags byte, seq, ack seqn
 
 // 从发送队列中取出数据并发送出去
 func (e *endpoint) handleWrite() *tcpip.Error {
+	e.sndBufMu.Lock()
+
+	// 得到第一个tcp段
+	first := e.sndQueue.Front()
+	if first != nil {
+		// 向发送链表添加元素
+		e.snd.writeList.PushBackList(&e.sndQueue)
+		// NOTE 更新发送队列下一个发送字节的序号 一次性将链表全部取用
+		// 当有新的数据需要发送时会有相关逻辑更新这个数值
+		e.snd.sndNxtList.UpdateForward(e.sndBufInQueue)
+		e.sndBufInQueue = 0
+	}
+
+	e.sndBufMu.Unlock()
+
+	// Initialize the next segment to write if it's currently nil.
+	// 初始化snder的发送列表头
+	if e.snd.writeNext == nil {
+		e.snd.writeNext = first
+	}
+
+	// Push out any new packets.
+	// 将数据发送出去
+	e.snd.sendData()
+
 	return nil
 }
 
 // 关闭连接的处理，最终会调用 sendData 来发送 fin 包
 func (e *endpoint) handleClose() *tcpip.Error {
+
+	// Drain the send queue.
+	e.handleWrite()
+
+	// Mark send side as closed.
+	// 标记发送器关闭
+	e.snd.closed = true
+
 	return nil
 }
 
 // handleSegments 从队列中取出 tcp 段数据，然后处理它们。
 func (e *endpoint) handleSegments() *tcpip.Error {
+	log.Println(unsafe.Pointer(e), "处理报文")
 	checkRequeue := true
 	for i := 0; i < maxSegmentsPerWake; i++ {
 		s := e.segmentQueue.dequeue()
@@ -561,6 +680,16 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 
 	// 收尾工作
+	// 收尾的一些工作
+	epilogue := func() {
+		// e.mu is expected to be hold upon entering this section.
+
+		// TODO 需要添加
+		e.mu.Unlock()
+
+		// When the protocol loop exits we should wake up our waiters.
+		e.waiterQueue.Notify(waiter.EventHUp | waiter.EventErr | waiter.EventIn | waiter.EventOut)
+	}
 
 	// 处理三次握手
 	if handshake {
@@ -572,7 +701,35 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 			// 执行握手
 			err = h.execute()
 		}
+		// 处理握手有错
+		if err != nil {
+			e.lastErrorMu.Lock()
+			e.lastError = err
+			e.lastErrorMu.Unlock()
+
+			e.mu.Lock()
+			e.state = stateError
+			e.hardError = err
+			// Lock released below.
+			epilogue()
+
+			return err
+		}
+
+		// 到这里就表示三次握手已经成功了，那么初始化发送器和接收器
+		e.snd = newSender(e, h.iss, h.ackNum-1, h.sndWnd, h.mss, h.sndWndScale)
+
+		e.rcvListMu.Lock()
+		e.rcv = newReceiver(e, h.ackNum-1, h.rcvWnd, h.effectiveRcvWndScale())
+		e.rcvListMu.Unlock()
 	}
+
+	e.mu.Lock()
+	e.state = stateConnected
+	// TODO drained
+	e.mu.Unlock()
+	// 提醒 Dial 函数 连接已经成功建立
+	e.waiterQueue.Notify(waiter.EventOut)
 
 	// Set up the functions that will be called when the main protocol loop
 	// wakes up.
@@ -601,11 +758,26 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 		s.AddWaker(funcs[i].w, i)
 	}
 
+	// 恢复的端点需要以下断言和通知。新创建的新端点具有空状态，不应调用任何端点。
+	e.segmentQueue.mu.Lock()
+	if !e.segmentQueue.list.Empty() {
+		e.newSegmentWaker.Assert()
+	}
+	e.segmentQueue.mu.Unlock()
+
+	e.rcvListMu.Lock()
+	if !e.rcvList.Empty() {
+		e.waiterQueue.Notify(waiter.EventIn)
+	}
+	e.rcvListMu.Unlock()
+
+	// TODO 需要添加 workerCleanup
+
 	// 主循环，处理tcp报文
 	// 要使这个主循环结束，也就是tcp连接完全关闭，得同时满足三个条件：
 	// 1，接收器关闭了 2，发送器关闭了 3，下一个未确认的序列号等于添加到发送列表的下一个段的序列号
 	//for !e.rcv.closed || !e.snd.closed || e.snd.sndUna != e.snd.sndNxtList {
-	for {
+	for !e.rcv.closed /*TODO 其他条件*/ {
 		e.workMu.Unlock()
 		// s.Fetch 会返回事件的index，比如 v=0 的话，
 		// funcs[v].f()就是调用 e.handleWrite
@@ -616,9 +788,19 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 			e.mu.Lock()
 			//e.resetConnectionLocked(err)
 			// Lock released below.
-			//epilogue()
+			epilogue()
 			log.Println(err)
 			return nil
 		}
 	}
+
+	// Mark endpoint as closed.
+	e.mu.Lock()
+	if e.state != stateError {
+		e.state = stateClosed
+	}
+	// Lock released below.
+	epilogue()
+
+	return nil
 }

@@ -1,7 +1,7 @@
 package tcp
 
 import (
-	"log"
+	"netstack/logger"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/seqnum"
@@ -48,8 +48,18 @@ type sender struct {
 	// sndNxt 是要发送的下一个段的序列号。
 	sndNxt seqnum.Value
 
+	// sndNxtList is the sequence number of the next segment to be added to
+	// the send list.
+	// sndNxtList 是要添加到发送列表的下一个段的序列号。
+	sndNxtList seqnum.Value
+
 	// maxSentAck is the maxium acknowledgement actually sent.
 	maxSentAck seqnum.Value
+
+	closed    bool
+	writeNext *segment
+	// 发送链表
+	writeList segmentList
 
 	// cc is the congestion control algorithm in use for this sender.
 	// cc 是实现拥塞控制算法的接口
@@ -67,9 +77,8 @@ func newSender(ep *endpoint, iss, irs seqnum.Value, sndWnd seqnum.Size, mss uint
 }
 
 func (s *sender) sendAck() {
-	log.Println("发送字节序", s.sndNxt)
 	s.sendSegment(buffer.VectorisedView{}, flagAck, s.sndNxt) // seq = cookies+1 ack ack|fin.seq+1
-	s.sendSegment(buffer.VectorisedView{}, flagFin, 0)
+	logger.TODO("发送字节序")
 }
 
 // sendSegment sends a new segment containing the given payload, flags and
@@ -98,5 +107,39 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 
 // 发送数据段，最终调用 sendSegment 来发送
 func (s *sender) sendData() {
+	//log.Println(unsafe.Pointer(s.ep), "怎么又调用了一次")
+	var seg *segment
+	// 遍历发送链表，发送数据
+	// tcp拥塞控制：s.outstanding < s.sndCwnd 判断正在发送的数据量不能超过拥塞窗口。
+	for seg = s.writeNext; seg != nil; /*&& s.outstanding < s.sndCwnd*/ seg = seg.Next() {
+		// 如果seg的flags是0，将flags改为psh|ack
+		if seg.flags == 0 {
+			seg.sequenceNumber = s.sndNxt
+			seg.flags = flagAck | flagPsh
+		}
 
+		var segEnd seqnum.Value
+		if seg.data.Size() == 0 { // 数据段没有负载，表示要结束连接
+			if s.writeList.Back() != seg {
+				panic("FIN segments must be the final segment in the write list.")
+			}
+			// 发送 fin 报文
+			seg.flags = flagAck | flagFin
+			// fin 报文需要确认，且消耗一个字节序列号
+			segEnd = seg.sequenceNumber.Add(1)
+		} else {
+			// We're sending a non-FIN segment.
+			if seg.flags&flagFin != 0 {
+				panic("Netstack queues FIN segments without data.")
+			}
+			logger.TODO("发送正常的数据, 需要流量控制")
+
+		}
+
+		s.sendSegment(seg.data, seg.flags, seg.sequenceNumber)
+		// 发送一个数据段后，更新sndNxt
+		if s.sndNxt.LessThan(segEnd) {
+			s.sndNxt = segEnd
+		}
+	}
 }

@@ -136,20 +136,24 @@ func main() {
 	go func() { // echo server
 		listener := tcpListen(s, proto, addr, localPort)
 		done <- struct{}{}
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Println(err)
-		}
-
 		for {
-			buf := make([]byte, 1024)
-			if _, err := conn.Read(buf); err != nil {
+			conn, err := listener.Accept()
+			if err != nil {
 				log.Println(err)
-				break
 			}
-			fmt.Println(string(buf))
-			//	conn.Write([]byte("Server echo"))
-			//}
+			log.Println("服务端 建立连接")
+
+			for {
+				buf := make([]byte, 1024)
+				if _, err := conn.Read(buf); err != nil {
+					log.Println(err)
+					break
+				}
+				fmt.Println(string(buf))
+				//	conn.Write([]byte("Server echo"))
+				//}
+			}
+
 		}
 		os.Exit(1)
 
@@ -159,10 +163,12 @@ func main() {
 	<-done
 	go func() {
 		port := localPort
-		_, err := Dial(s, header.IPv4ProtocolNumber, addr, port)
+		conn, err := Dial(s, header.IPv4ProtocolNumber, addr, port)
 		if err != nil {
 			log.Fatal(err)
 		}
+		log.Println("客户端 建立连接")
+		conn.Close()
 	}()
 
 	close(done)
@@ -180,6 +186,7 @@ func Dial(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Address,
 	}
 	var wq waiter.Queue
 	waitEntry, notifyCh := waiter.NewChannelEntry(nil)
+	wq.EventRegister(&waitEntry, waiter.EventOut)
 	// 新建一个tcp端
 	ep, err := s.NewEndpoint(tcp.ProtocolNumber, proto, &wq)
 	if err != nil {
@@ -189,6 +196,7 @@ func Dial(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Address,
 	if err != nil {
 		if err == tcpip.ErrConnectStarted {
 			<-notifyCh
+			log.Println("???")
 		} else {
 			return nil, fmt.Errorf("%s", err.String())
 		}
@@ -243,6 +251,11 @@ func (conn *TcpConn) Write(snd []byte) error {
 		}
 		return nil
 	}
+}
+
+func (conn *TcpConn) Close() {
+	log.Println("Close")
+	conn.ep.Close()
 }
 
 // Listener tcp连接监听器

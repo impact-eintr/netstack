@@ -26,7 +26,7 @@ func (v Value) InRange(a, b Value) bool {
 }
 
 // InWindows check v in [first, first+size)
-func (v Value) InWindows(first Value, size Size) bool {
+func (v Value) InWindow(first Value, size Size) bool {
 	return v.InRange(first, first.Add(size))
 }
 

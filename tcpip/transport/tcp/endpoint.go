@@ -41,6 +41,11 @@ type endpoint struct {
 	netProto    tcpip.NetworkProtocolNumber // 网络协议号 ipv4 ipv6
 	waiterQueue *waiter.Queue               // 事件驱动机制
 
+	// lastError represents the last error that the endpoint reported;
+	// access to it is protected by the following mutex.
+	lastErrorMu sync.Mutex
+	lastError   *tcpip.Error
+
 	// TODO 需要添加
 
 	// rcvListMu can be taken after the endpoint mu below.
@@ -87,6 +92,9 @@ type endpoint struct {
 	// tsOffset is a randomized offset added to the value of the
 	// TSVal field in the timestamp option.
 	tsOffset uint32
+
+	// shutdownFlags represent the current shutdown state of the endpoint.
+	shutdownFlags tcpip.ShutdownFlags
 
 	// sackPermitted is set to true if the peer sends the TCPSACKPermitted
 	// option in the SYN/SYN-ACK.
@@ -146,7 +154,25 @@ func newEndpoint(stack *stack.Stack, netProto tcpip.NetworkProtocolNumber, waite
 }
 
 func (e *endpoint) Close() {
-	log.Println("TODO 在写了 在写了")
+	e.Shutdown(tcpip.ShutdownWrite | tcpip.ShutdownRead)
+	e.mu.Lock()
+
+	// We always release ports inline so that they are immediately available
+	// for reuse after Close() is called. If also registered, it means this
+	// is a listening socket, so we must unregister as well otherwise the
+	// next user would fail in Listen() when trying to register.
+	if e.isPortReserved {
+		e.stack.ReleasePort(e.effectiveNetProtos, ProtocolNumber, e.id.LocalAddress, e.id.LocalPort)
+		e.isPortReserved = false
+
+		if e.isRegistered {
+			e.stack.UnregisterTransportEndpoint(e.boundNICID, e.effectiveNetProtos, ProtocolNumber, e.id)
+			e.isRegistered = false
+		}
+	}
+
+	logger.TODO("添加清理资源的逻辑")
+	e.mu.Unlock()
 }
 
 // Read 从tcp的接收队列中读取数据
@@ -407,6 +433,46 @@ func (e *endpoint) connect(addr tcpip.FullAddress, handshake bool, run bool) (er
 }
 
 func (e *endpoint) Shutdown(flags tcpip.ShutdownFlags) *tcpip.Error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.shutdownFlags |= flags
+
+	switch e.state {
+	case stateConnected: // 客户端关闭
+		// 不能直接关闭读数据包，因为关闭连接的时候四次挥手还需要读取报文。
+		if (e.shutdownFlags & tcpip.ShutdownWrite) != 0 {
+			e.rcvListMu.Lock()
+			rcvBufUsed := e.rcvBufUsed
+			e.rcvListMu.Unlock()
+			if rcvBufUsed > 0 {
+				// 如果接收队列中还有数据 通知对端RESET
+				logger.TODO("通知对端RESET")
+				return nil
+			}
+		}
+
+		e.sndBufMu.Lock()
+		if e.sndClosed {
+			// Already closed.
+			e.sndBufMu.Unlock()
+			break
+		}
+
+		// Queue fin segment.
+		s := newSegmentFromView(&e.route, e.id, nil)
+		e.sndQueue.PushBack(s)
+		e.sndBufInQueue++ // 仅仅占用一个字节位置
+		// Mark endpoint as closed.
+		e.sndClosed = true
+		e.sndBufMu.Unlock()
+
+		// 触发调用 handleClose
+		e.sndCloseWaker.Assert()
+	case stateListen: // 服务端关闭
+		logger.FIXME("添加服务端关闭逻辑")
+	default:
+		return tcpip.ErrNotConnected
+	}
 	return nil
 }
 
@@ -640,11 +706,11 @@ func (e *endpoint) HandlePacket(r *stack.Route, id stack.TransportEndpointID, vv
 	}
 	// Send packet to worker goroutine.
 	if e.segmentQueue.enqueue(s) {
-		var prifix string = "tcp连接"
+		var prefix string = "tcp连接"
 		if _, err := e.GetRemoteAddress(); err != nil {
-			prifix = "监听者"
+			prefix = "监听者"
 		}
-		log.Printf(prifix+"收到 tcp [%s] 报文片段 from %s, seq: %d, ack: |%d|",
+		log.Printf(prefix+"收到 tcp [%s] 报文片段 from %s, seq: %d, ack: |%d|",
 			flagString(s.flags), fmt.Sprintf("%s:%d", s.id.RemoteAddress, s.id.RemotePort),
 			s.sequenceNumber, s.ackNumber)
 

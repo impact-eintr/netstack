@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"log"
 	"sync"
 )
 
@@ -49,4 +50,20 @@ func (l *logger) Info(mask uint8, f func()) {
 	if mask&l.flags != 0 {
 		f()
 	}
+}
+
+func (l *logger) info(f func()) {
+	f()
+}
+
+func TODO(msg string) {
+	GetInstance().info(func() {
+		log.Println("TODO: " + msg)
+	})
+}
+
+func FIXME(msg string) {
+	GetInstance().info(func() {
+		log.Fatal("FIXME: " + msg)
+	})
 }
