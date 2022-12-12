@@ -7,7 +7,9 @@ import (
 	"net"
 	"netstack/logger"
 	"netstack/tcpip"
+	"netstack/tcpip/header"
 	"netstack/tcpip/link/fdbased"
+	"netstack/tcpip/link/loopback"
 	"netstack/tcpip/link/tuntap"
 	"netstack/tcpip/network/arp"
 	"netstack/tcpip/network/ipv4"
@@ -95,12 +97,16 @@ func main() {
 		ResolutionRequired: true,
 	})
 
+	_ = linkID
+
+	loopbackLinkID := loopback.New()
+
 	// 新建相关协议的协议栈
 	s := stack.New([]string{ipv4.ProtocolName, arp.ProtocolName},
 		[]string{tcp.ProtocolName, udp.ProtocolName}, stack.Options{})
 
 	// 新建抽象的网卡
-	if err := s.CreateNamedNIC(1, "vnic1", linkID); err != nil {
+	if err := s.CreateNamedNIC(1, "vnic1", loopbackLinkID); err != nil {
 		log.Fatal(err)
 	}
 
@@ -124,9 +130,12 @@ func main() {
 		},
 	})
 
+	done := make(chan struct{}, 2)
+
 	//logger.SetFlags(logger.TCP)
 	go func() { // echo server
 		listener := tcpListen(s, proto, addr, localPort)
+		done <- struct{}{}
 		conn, err := listener.Accept()
 		if err != nil {
 			log.Println(err)
@@ -135,10 +144,10 @@ func main() {
 		for {
 			buf := make([]byte, 1024)
 			if _, err := conn.Read(buf); err != nil {
-				log.Fatal(err)
+				log.Println(err)
+				break
 			}
 			fmt.Println(string(buf))
-			//if string(buf) != "" {
 			//	conn.Write([]byte("Server echo"))
 			//}
 		}
@@ -147,11 +156,52 @@ func main() {
 		select {}
 	}()
 
+	<-done
+	go func() {
+		port := localPort
+		_, err := Dial(s, header.IPv4ProtocolNumber, addr, port)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	close(done)
+
 	c := make(chan os.Signal)
 	signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGUSR1, syscall.SIGUSR2)
 	<-c
 }
 
+// Dial 呼叫tcp服务端
+func Dial(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Address, port int) (*TcpConn, error) {
+	remote := tcpip.FullAddress{
+		Addr: addr,
+		Port: uint16(port),
+	}
+	var wq waiter.Queue
+	waitEntry, notifyCh := waiter.NewChannelEntry(nil)
+	// 新建一个tcp端
+	ep, err := s.NewEndpoint(tcp.ProtocolNumber, proto, &wq)
+	if err != nil {
+		return nil, fmt.Errorf("%s", err.String())
+	}
+	err = ep.Connect(remote)
+	if err != nil {
+		if err == tcpip.ErrConnectStarted {
+			<-notifyCh
+		} else {
+			return nil, fmt.Errorf("%s", err.String())
+		}
+	}
+
+	return &TcpConn{
+		ep:       ep,
+		wq:       &wq,
+		we:       &waitEntry,
+		notifyCh: notifyCh}, nil
+}
+
+// TcpConn 一条tcp连接
 type TcpConn struct {
 	raddr    tcpip.FullAddress
 	ep       tcpip.Endpoint
@@ -235,7 +285,7 @@ func tcpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Add
 
 	// 绑定IP和端口，这里的IP地址为空，表示绑定任何IP
 	// 此时就会调用端口管理器
-	if err := ep.Bind(tcpip.FullAddress{NIC: 1, Addr: addr, Port: uint16(localPort)}, nil); err != nil {
+	if err := ep.Bind(tcpip.FullAddress{NIC: 1, Addr: "", Port: uint16(localPort)}, nil); err != nil {
 		log.Fatal("Bind failed: ", err)
 	}
 

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log"
+	"netstack/logger"
 	"netstack/sleep"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
@@ -74,6 +75,10 @@ const (
 	maxOptionSize = 40
 )
 
+// 主机 B 的 TCP 收到连接请求 syn 报文段后，需要回复 syn+ack 报文因为 tcp 的控制报文需要消耗一个字节的序列号，
+// 所以回复的 ack 序列号为 ISN1+1，设置接收窗口，设置握手状态为 SynRcvd，
+// 并随机生成 ISN2、计算 MSS、计算接收窗口扩展因子、是否开启 sack。
+// 根据这些参数生成 syn+ack 报文的选项参数，附在 tcp 选项中，回复给主机 A。
 func newHandshake(ep *endpoint, rcvWnd seqnum.Size) (handshake, *tcpip.Error) {
 	h := handshake{
 		ep:     ep,
@@ -98,8 +103,7 @@ func (h *handshake) resetState() *tcpip.Error {
 	h.flags = flagSyn
 	h.ackNum = 0
 	h.mss = 0
-	h.iss = seqnum.Value(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
-	log.Println("收到 syn 同步报文 设置tcp状态为 [sent]")
+	h.iss = seqnum.Value(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24) // 随机生成ISN2
 
 	return nil
 }
@@ -128,11 +132,11 @@ func (h *handshake) resolveRoute() *tcpip.Error {
 	// Initial action is to resolve route.
 	index := wakerForResolution
 	for {
-		log.Println(index)
 		switch index {
 		case wakerForResolution:
 			if _, err := h.ep.route.Resolve(resolutionWaker); err != tcpip.ErrWouldBlock {
 				// Either success (err == nil) or failure.
+				log.Println("没有地址", err)
 				return err
 			}
 			// Resolution not completed. Keep trying...
@@ -258,7 +262,7 @@ func (h *handshake) processSegments() *tcpip.Error {
 // 执行tcp 3次握手，客户端和服务端都是调用该函数来实现三次握手
 /*
 			c	   flag  	s
-			|				|
+生成ISN1	|				|生成ISN2
    sync_sent|------sync---->|sync_rcvd
 			|				|
 			|				|
@@ -302,7 +306,7 @@ func (h *handshake) execute() *tcpip.Error {
 		case wakerForResend: // NOTE tcp超时重传机制
 			// 如果是客户端当发送 syn 报文，超过一定的时间未收到回包，触发超时重传
 			// 如果是服务端当发送 syn+ack 报文，超过一定的时间未收到 ack 回包，触发超时重传
-			// 超时时间变为上次的2倍
+			// 超时时间变为上次的2倍 如果重传周期超过 1 分钟，返回错误，不再尝试重连
 			timeOut *= 2
 			if timeOut > 60*time.Second {
 				return tcpip.ErrTimeout
@@ -313,6 +317,8 @@ func (h *handshake) execute() *tcpip.Error {
 		case wakerForNotification:
 
 		case wakerForNewSegment:
+			// 对方主机的 TCP 收到 syn+ack 报文段后，还要向 本机 回复确认和上面一样，
+			// tcp 的控制报文需要消耗一个字节的序列号，所以回复的 ack 序列号为 ISN2+1，发送 ack 报文给本机。
 			// 处理握手报文
 			if err := h.processSegments(); err != nil {
 				return err
@@ -447,7 +453,7 @@ func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.Vectorise
 		r.Stats().TCP.ResetsSent.Increment()
 	}
 
-	log.Printf("send tcp %s segment to %s, seq: |%d|, ack: %d, rcvWnd: %d",
+	log.Printf("TCP 发送 [%s] 报文片段到 %s, seq: |%d|, ack: %d, rcvWnd: %d",
 		flagString(flags), fmt.Sprintf("%s:%d", id.RemoteAddress, id.RemotePort),
 		seq, ack, rcvWnd)
 
@@ -553,6 +559,21 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 
 // protocolMainLoop 是TCP协议的主循环。它在自己的goroutine中运行，负责握手、发送段和处理收到的段
 func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
+
+	// 收尾工作
+
+	// 处理三次握手
+	if handshake {
+		h, err := newHandshake(e, seqnum.Size(e.receiveBufferAvailable()))
+		logger.GetInstance().Info(logger.HANDSHAKE, func() {
+			log.Println("TCP STATE SENT")
+		})
+		if err == nil {
+			// 执行握手
+			err = h.execute()
+		}
+	}
+
 	// Set up the functions that will be called when the main protocol loop
 	// wakes up.
 	// 触发器的事件，这些函数很重要

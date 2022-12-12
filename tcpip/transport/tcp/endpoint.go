@@ -337,7 +337,31 @@ func (e *endpoint) connect(addr tcpip.FullAddress, handshake bool, run bool) (er
 			return err
 		}
 	} else {
-		// TODO 需要添加
+		// 端点还没有本地端口，所以尝试获取一个端口。确保它不会导致本地和远程的相同地址/端口（否则此端点将尝试连接到自身）
+		// 远端地址和本地地址是否相同
+		// NOTE 这段代码值得借鉴
+		sameAddr := e.id.LocalAddress == e.id.RemoteAddress
+		if _, err := e.stack.PickEphemeralPort(func(p uint16) (bool, *tcpip.Error) {
+			if sameAddr && p == e.id.RemotePort { // 同样的ip同样的port 打咩捏
+				return false, nil
+			}
+			if !e.stack.IsPortAvailable(netProtos, ProtocolNumber, e.id.LocalAddress, p) { // 端口被占用打咩
+				return false, nil
+			}
+			id := e.id
+			id.LocalPort = p
+			switch e.stack.RegisterTransportEndpoint(nicid, netProtos, ProtocolNumber, id, e) {
+			case nil:
+				e.id = id
+				return true, nil
+			case tcpip.ErrPortInUse:
+				return false, nil
+			default:
+				return false, err
+			}
+		}); err != nil {
+			return err
+		}
 	}
 
 	// Remove the port reservation. This can happen when Bind is called
@@ -356,7 +380,28 @@ func (e *endpoint) connect(addr tcpip.FullAddress, handshake bool, run bool) (er
 	e.effectiveNetProtos = netProtos
 	e.connectingAddress = connectingAddr
 
-	// TODO 需要添加
+	// Connect in the restore phase does not perform handshake. Restore its
+	// connection setting here.
+	if !handshake {
+		//e.segmentQueue.mu.Lock()
+		//for _, l := range []segmentList{e.segmentQueue.list, e.sndQueue, e.snd.writeList} {
+		//	for s := l.Front(); s != nil; s = s.Next() {
+		//		s.id = e.id
+		//		s.route = r.Clone()
+		//		e.sndWaker.Assert()
+		//	}
+		//}
+		//e.segmentQueue.mu.Unlock()
+		//e.snd.updateMaxPayloadSize(int(e.route.MTU()), 0)
+		//e.state = stateConnected
+	}
+
+	if run {
+		e.workerRunning = true
+		e.stack.Stats().TCP.ActiveConnectionOpenings.Increment()
+		// tcp的主函数
+		go e.protocolMainLoop(handshake)
+	}
 
 	return tcpip.ErrConnectStarted
 }

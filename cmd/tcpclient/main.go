@@ -12,6 +12,7 @@ func main() {
 		fmt.Println("err : ", err)
 		return
 	}
+	conn.Write([]byte("hello world"))
 	//buf := make([]byte, 1024)
 	//conn.Read(buf)
 	if err = conn.Close(); err != nil {

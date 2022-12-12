@@ -86,6 +86,11 @@ func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum
 
 		// 收到 fin，立即回复 ack
 		r.ep.snd.sendAck() // FIXME 不应该是 seq+2 捏
+
+		// 标记接收器关闭
+		// 触发上层应用可以读取
+		r.closed = true
+		r.ep.readyToRead(nil)
 	}
 
 	return true
@@ -108,7 +113,7 @@ func (r *receiver) handleRcvdSegment(s *segment) {
 		return
 	}
 
-	log.Println(s.data, segLen, segSeq)
+	//log.Println(s.data, segLen, segSeq)
 
 	// Defer segment processing if it can't be consumed now.
 	// tcp可靠性：r.consumeSegment 返回值是个bool类型，如果是true，表示已经消费该数据段，

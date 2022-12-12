@@ -222,13 +222,12 @@ func (l *listenContext) createEndpointAndPerformHandshake(s *segment, opts *head
 	irs := s.sequenceNumber
 	cookie := l.createCookie(s.id, irs, encodeMSS(opts.MSS))
 	logger.GetInstance().Info(logger.HANDSHAKE, func() {
-		log.Println("收到一个远端握手申请 SYN seq=", irs, "客户端请携带 标记 iss ", cookie, "+1")
+		log.Println("收到一个远端握手申请 SYN seq =", irs, "客户端请携带 标记 iss ", cookie, "+1")
 	})
 	ep, err := l.createConnectedEndpoint(s, cookie, irs, opts)
 	if err != nil {
 		return nil, err
 	}
-	log.Println("TCP STATE LISTEN")
 
 	// 以下执行三次握手
 
@@ -238,10 +237,11 @@ func (l *listenContext) createEndpointAndPerformHandshake(s *segment, opts *head
 		ep.Close()
 		return nil, err
 	}
-
 	// 标记状态为 handshakeSynRcvd 和 h.flags为 syn+ack
-	log.Println("TCP STATE SYN_RCVD")
 	h.resetToSynRcvd(cookie, irs, opts)
+
+	log.Println("TCP STATE SYN_RCVD")
+
 	// 发送ack报文 接收client返回的ack
 	if err := h.execute(); err != nil {
 		ep.Close()
@@ -351,6 +351,7 @@ func (e *endpoint) protocolListenLoop(rcvWnd seqnum.Size) *tcpip.Error {
 					mayRequeue = false
 					break
 				}
+				log.Println("TCP STATE LISTEN")
 				e.handleListenSegment(ctx, s)
 				s.decRef()
 			}
