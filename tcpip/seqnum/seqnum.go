@@ -46,6 +46,7 @@ func (v *Value) UpdateForward(s Size) {
 }
 
 // Overlap checks if the window [a,a+b) overlaps with the window [x, x+y).
+// [a,x+y)&&[x, a+b) [a, x, a+b, x+y) [a, x, x+y, a+b) [x, a, a+b, x+y) [x, a, x+y, a+b)
 func Overlap(a Value, b Size, x Value, y Size) bool {
 	return a.LessThan(x.Add(y)) && x.LessThan(a.Add(b))
 }

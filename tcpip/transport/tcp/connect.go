@@ -14,7 +14,6 @@ import (
 	"netstack/waiter"
 	"sync"
 	"time"
-	"unsafe"
 )
 
 const maxSegmentsPerWake = 100
@@ -502,7 +501,7 @@ func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.Vectorise
 	// Allocate a buffer for the TCP header.
 	hdr := buffer.NewPrependable(header.TCPMinimumSize + int(r.MaxHeaderLength()) + optLen)
 
-	if rcvWnd > 0xffff {
+	if rcvWnd > 0xffff { // 65535
 		rcvWnd = 0xffff
 	}
 
@@ -521,7 +520,7 @@ func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.Vectorise
 
 	// Only calculate the checksum if offloading isn't supported.
 	if r.Capabilities()&stack.CapabilityChecksumOffload == 0 {
-		length := uint16(hdr.UsedLength() + data.Size())
+		length := uint16(hdr.UsedLength() + data.Size()) // 报文头+数据长度
 		// tcp伪首部校验和的计算
 		xsum := r.PseudoHeaderChecksum(ProtocolNumber)
 		for _, v := range data.Views() {
@@ -640,7 +639,6 @@ func (e *endpoint) handleClose() *tcpip.Error {
 
 // handleSegments 从队列中取出 tcp 段数据，然后处理它们。
 func (e *endpoint) handleSegments() *tcpip.Error {
-	log.Println(unsafe.Pointer(e), "处理报文")
 	checkRequeue := true
 	for i := 0; i < maxSegmentsPerWake; i++ {
 		s := e.segmentQueue.dequeue()
@@ -648,10 +646,18 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 			checkRequeue = false
 			break
 		}
+
+		// Invoke the tcp probe if installed.
+		if e.probe != nil {
+			e.probe(e.completeState())
+		}
+
 		if s.flagIsSet(flagRst) {
 			// TODO 如果收到 rst 报文
-			s.decRef()
-			return tcpip.ErrConnectionReset
+			if e.rcv.acceptable(s.sequenceNumber, 0) {
+				s.decRef()
+				return tcpip.ErrConnectionReset
+			}
 		} else if s.flagIsSet(flagAck) {
 			// 处理正常报文
 			// Patch the window size in the segment according to the

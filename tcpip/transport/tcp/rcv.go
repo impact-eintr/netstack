@@ -17,24 +17,32 @@ type receiver struct {
 
 	closed bool
 
-	// TODO 需要添加
+	pendingRcvdSegments segmentHeap
+	pendingBufUsed      seqnum.Size
+	pendingBufSize      seqnum.Size
 }
 
 // 新建并初始化接收器
 func newReceiver(ep *endpoint, irs seqnum.Value, rcvWnd seqnum.Size, rcvWndScale uint8) *receiver {
 	r := &receiver{
-		ep:          ep,
-		rcvNxt:      irs + 1, // 成功建立连接后期望读取的第一个字节序号
-		rcvAcc:      irs.Add(rcvWnd + 1),
-		rcvWndScale: rcvWndScale,
+		ep:             ep,
+		rcvNxt:         irs + 1, // 成功建立连接后期望读取的第一个字节序号
+		rcvAcc:         irs.Add(rcvWnd + 1),
+		rcvWndScale:    rcvWndScale,
+		pendingBufSize: rcvWnd,
 	}
 	return r
 }
 
 // tcp流量控制：判断 segSeq 在窗口內
 func (r *receiver) acceptable(segSeq seqnum.Value, segLen seqnum.Size) bool {
-	// TODO 流量控制
-	return true
+	rcvWnd := r.rcvNxt.Size(r.rcvAcc)
+	if rcvWnd == 0 {
+		return segLen == 0 && segSeq == r.rcvNxt // 是否卡在边上
+	}
+
+	return segSeq.InWindow(r.rcvNxt, rcvWnd) || // 在窗口内部
+		seqnum.Overlap(r.rcvNxt, rcvWnd, segSeq, segLen) // 范围有重叠
 }
 
 // getSendParams returns the parameters needed by the sender when building
@@ -85,7 +93,7 @@ func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum
 		r.rcvNxt++
 
 		// 收到 fin，立即回复 ack
-		r.ep.snd.sendAck() // FIXME 不应该是 seq+2 捏
+		r.ep.snd.sendAck()
 
 		// 标记接收器关闭
 		// 触发上层应用可以读取

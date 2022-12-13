@@ -33,6 +33,7 @@ func ChecksumCombine(a, b uint16) uint16 {
 // given destination protocol and network address, ignoring the length
 // field. Pseudo-headers are needed by transport layers when calculating
 // their own checksum.
+// hash(protocol, hash(dst, hash(src, 0)))
 func PseudoHeaderChecksum(protocol tcpip.TransportProtocolNumber, srcAddr tcpip.Address, dstAddr tcpip.Address) uint16 {
 	xsum := Checksum([]byte(srcAddr), 0)
 	xsum = Checksum([]byte(dstAddr), xsum)

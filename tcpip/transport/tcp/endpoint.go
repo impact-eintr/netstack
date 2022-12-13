@@ -32,6 +32,19 @@ const (
 	stateError
 )
 
+// SACKInfo holds TCP SACK related information for a given endpoint.
+//
+// +stateify savable
+type SACKInfo struct {
+	// Blocks is the maximum number of SACK blocks we track
+	// per endpoint.
+	Blocks [MaxSACKBlocks]header.SACKBlock
+
+	// NumBlocks is the number of valid SACK blocks stored in the
+	// blocks array above.
+	NumBlocks int
+}
+
 // endpoint 表示TCP端点。该结构用作端点用户和协议实现之间的接口;让并发goroutine调用端点是合法的，
 // 它们是正确同步的。然而，协议实现在单个goroutine中运行。
 type endpoint struct {
@@ -100,6 +113,8 @@ type endpoint struct {
 	// option in the SYN/SYN-ACK.
 	sackPermitted bool
 
+	sack SACKInfo
+
 	segmentQueue segmentQueue
 
 	// When the send side is closed, the protocol goroutine is notified via
@@ -112,6 +127,14 @@ type endpoint struct {
 	sndQueue      segmentList
 	sndWaker      sleep.Waker
 	sndCloseWaker sleep.Waker
+
+	// The following are used when a "packet too big" control packet is
+	// received. They are protected by sndBufMu. They are used to
+	// communicate to the main protocol goroutine how many such control
+	// messages have been received since the last notification was processed
+	// and what was the smallest MTU seen
+	packetTooBigCount int
+	sndMTU            int
 
 	// notificationWaker is used to indicate to the protocol goroutine that
 	// it needs to wake up and check for notifications.
@@ -131,6 +154,10 @@ type endpoint struct {
 	// therefore don't need locks to protect them.
 	rcv *receiver
 	snd *sender
+
+	// probe if not nil is invoked on every received segment. It is passed
+	// a copy of the current state of the endpoint.
+	probe stack.TCPProbeFunc
 
 	// The following are only used to assist the restore run to re-connect.
 	bindAddress       tcpip.Address
@@ -816,4 +843,96 @@ func (e *endpoint) maybeEnableSACKPermitted(synOpts *header.TCPSynOptions) {
 	if bool(v) && synOpts.SACKPermitted {
 		e.sackPermitted = true
 	}
+}
+
+// completeState makes a full copy of the endpoint and returns it. This is used
+// before invoking the probe. The state returned may not be fully consistent if
+// there are intervening syscalls when the state is being copied.
+func (e *endpoint) completeState() stack.TCPEndpointState {
+	var s stack.TCPEndpointState
+	s.SegTime = time.Now()
+
+	// Copy EndpointID.
+	e.mu.Lock()
+	s.ID = stack.TCPEndpointID(e.id)
+	e.mu.Unlock()
+
+	// Copy endpoint rcv state.
+	e.rcvListMu.Lock()
+	s.RcvBufSize = e.rcvBufSize
+	s.RcvBufUsed = e.rcvBufUsed
+	s.RcvClosed = e.rcvClosed
+	e.rcvListMu.Unlock()
+
+	// Endpoint TCP Option state.
+	s.SendTSOk = e.sendTSOk
+	s.RecentTS = e.recentTS
+	s.TSOffset = e.tsOffset
+	s.SACKPermitted = e.sackPermitted
+	s.SACK.Blocks = make([]header.SACKBlock, e.sack.NumBlocks)
+	copy(s.SACK.Blocks, e.sack.Blocks[:e.sack.NumBlocks])
+
+	// Copy endpoint send state.
+	e.sndBufMu.Lock()
+	s.SndBufSize = e.sndBufSize
+	s.SndBufUsed = e.sndBufUsed
+	s.SndClosed = e.sndClosed
+	s.SndBufInQueue = e.sndBufInQueue
+	s.PacketTooBigCount = e.packetTooBigCount
+	s.SndMTU = e.sndMTU
+	e.sndBufMu.Unlock()
+
+	// Copy receiver state.
+	s.Receiver = stack.TCPReceiverState{
+		RcvNxt:         e.rcv.rcvNxt,
+		RcvAcc:         e.rcv.rcvAcc,
+		RcvWndScale:    e.rcv.rcvWndScale,
+		PendingBufUsed: e.rcv.pendingBufUsed,
+		PendingBufSize: e.rcv.pendingBufSize,
+	}
+
+	// Copy sender state.
+	s.Sender = stack.TCPSenderState{
+		LastSendTime: e.snd.lastSendTime,
+		DupAckCount:  e.snd.dupAckCount,
+		//FastRecovery: stack.TCPFastRecoveryState{
+		//	Active:  e.snd.fr.active,
+		//	First:   e.snd.fr.first,
+		//	Last:    e.snd.fr.last,
+		//	MaxCwnd: e.snd.fr.maxCwnd,
+		//},
+		SndCwnd:          e.snd.sndCwnd,
+		Ssthresh:         e.snd.sndSsthresh,
+		SndCAAckCount:    e.snd.sndCAAckCount,
+		Outstanding:      e.snd.outstanding,
+		SndWnd:           e.snd.sndWnd,
+		SndUna:           e.snd.sndUna,
+		SndNxt:           e.snd.sndNxt,
+		RTTMeasureSeqNum: e.snd.rttMeasureSeqNum,
+		RTTMeasureTime:   e.snd.rttMeasureTime,
+		Closed:           e.snd.closed,
+		RTO:              e.snd.rto,
+		SRTTInited:       e.snd.srttInited,
+		MaxPayloadSize:   e.snd.maxPayloadSize,
+		SndWndScale:      e.snd.sndWndScale,
+		MaxSentAck:       e.snd.maxSentAck,
+	}
+	e.snd.rtt.Lock()
+	s.Sender.SRTT = e.snd.rtt.srtt
+	e.snd.rtt.Unlock()
+
+	//if cubic, ok := e.snd.cc.(*cubicState); ok {
+	//	s.Sender.Cubic = stack.TCPCubicState{
+	//		WMax:                    cubic.wMax,
+	//		WLastMax:                cubic.wLastMax,
+	//		T:                       cubic.t,
+	//		TimeSinceLastCongestion: time.Since(cubic.t),
+	//		C:                       cubic.c,
+	//		K:                       cubic.k,
+	//		Beta:                    cubic.beta,
+	//		WC:                      cubic.wC,
+	//		WEst:                    cubic.wEst,
+	//	}
+	//}
+	return s
 }

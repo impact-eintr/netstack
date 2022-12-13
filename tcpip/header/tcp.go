@@ -131,6 +131,23 @@ const (
 )
 
 // SACKBlock 表示 sack 块的结构体
+/*
+         +--------+--------+
+         | Kind=5 | Length |
++--------+--------+--------+---------+
+|          Start of 1st Block        |
++--------+--------+--------+---------+
+|           End of 1st Block         |
++--------+--------+--------+---------+
+|                                    |
+/            . . . . . .             /
+|                                    |
++--------+--------+--------+---------+
+|          Start of nth Block        |
++--------+--------+--------+---------+
+|           End of nth Block         |
++--------+--------+--------+---------+
+*/
 type SACKBlock struct {
 	// Start indicates the lowest sequence number in the block.
 	Start seqnum.Value

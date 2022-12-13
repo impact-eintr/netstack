@@ -2,9 +2,11 @@ package tcp
 
 import (
 	"netstack/logger"
+	"netstack/sleep"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/seqnum"
+	"sync"
 	"time"
 )
 
@@ -45,6 +47,43 @@ type sender struct {
 	// lastSendTime 是发送最后一个数据包的时间戳。
 	lastSendTime time.Time
 
+	// dupAckCount is the number of duplicated acks received. It is used for
+	// fast retransmit.
+	// dupAckCount 是收到的重复ack数。它用于快速重传。
+	dupAckCount int
+
+	// fr holds state related to fast recovery.
+	// fr 持有与快速恢复有关的状态。
+	fr fastRecovery
+
+	// sndCwnd is the congestion window, in packets.
+	// sndCwnd 是拥塞窗口，单位是包
+	sndCwnd int
+
+	// sndSsthresh is the threshold between slow start and congestion
+	// avoidance.
+	// sndSsthresh 是慢启动和拥塞避免之间的阈值。
+	sndSsthresh int
+
+	// sndCAAckCount is the number of packets acknowledged during congestion
+	// avoidance. When enough packets have been ack'd (typically cwnd
+	// packets), the congestion window is incremented by one.
+	// sndCAAckCount 是拥塞避免期间确认的数据包数。当已经确认了足够的分组（通常是cwnd分组）时，拥塞窗口增加1。
+	sndCAAckCount int
+
+	// outstanding is the number of outstanding packets, that is, packets
+	// that have been sent but not yet acknowledged.
+	// outstanding 是正在发送的数据包的数量，即已发送但尚未确认的数据包。
+	outstanding int
+
+	// sndWnd is the send window size.
+	// 发送窗口大小，单位是字节
+	sndWnd seqnum.Size
+
+	// sndUna is the next unacknowledged sequence number.
+	// sndUna 是下一个未确认的序列号
+	sndUna seqnum.Value
+
 	// sndNxt 是要发送的下一个段的序列号。
 	sndNxt seqnum.Value
 
@@ -53,17 +92,53 @@ type sender struct {
 	// sndNxtList 是要添加到发送列表的下一个段的序列号。
 	sndNxtList seqnum.Value
 
-	// maxSentAck is the maxium acknowledgement actually sent.
-	maxSentAck seqnum.Value
+	// rttMeasureSeqNum is the sequence number being used for the latest RTT
+	// measurement.
+	rttMeasureSeqNum seqnum.Value
+
+	// rttMeasureTime is the time when the rttMeasureSeqNum was sent.
+	rttMeasureTime time.Time
 
 	closed    bool
 	writeNext *segment
 	// 发送链表
-	writeList segmentList
+	writeList   segmentList
+	resendTimer timer
+	resendWaker sleep.Waker
+
+	rtt        rtt           // 往返时间
+	rto        time.Duration // 超时重发时间
+	srttInited bool
+
+	// maxPayloadSize is the maximum size of the payload of a given segment.
+	// It is initialized on demand.
+	maxPayloadSize int
+
+	// sndWndScale is the number of bits to shift left when reading the send
+	// window size from a segment.
+	sndWndScale uint8
+
+	// maxSentAck is the maxium acknowledgement actually sent.
+	maxSentAck seqnum.Value
 
 	// cc is the congestion control algorithm in use for this sender.
 	// cc 是实现拥塞控制算法的接口
 	cc congestionControl
+}
+
+type rtt struct {
+	sync.Mutex
+	srtt   time.Duration // 平滑 RTT 时间
+	rttvar time.Duration // rtt 平均偏差 ∑|x-xbar|/n
+}
+
+// fastRecovery holds information related to fast recovery from a packet loss.
+//
+// +stateify savable
+// fastRecovery 保存与数据包丢失快速恢复相关的信息
+type fastRecovery struct {
+	active bool
+	// TODO 需要添加
 }
 
 // 新建并初始化发送器 irs是cookies
