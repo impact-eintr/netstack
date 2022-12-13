@@ -37,6 +37,7 @@ func newReceiver(ep *endpoint, irs seqnum.Value, rcvWnd seqnum.Size, rcvWndScale
 // tcp流量控制：判断 segSeq 在窗口內
 func (r *receiver) acceptable(segSeq seqnum.Value, segLen seqnum.Size) bool {
 	rcvWnd := r.rcvNxt.Size(r.rcvAcc)
+	//defer log.Println(r.rcvNxt, rcvWnd, segSeq, segLen, segSeq.InWindow(r.rcvNxt, rcvWnd))
 	if rcvWnd == 0 {
 		return segLen == 0 && segSeq == r.rcvNxt // 是否卡在边上
 	}
@@ -83,6 +84,7 @@ func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum
 	}
 
 	// 因为前面已经收到正确按序到达的数据，那么我们应该更新一下我们期望下次收到的序列号了
+	// 如果是一个ACK的话 不消耗序列号
 	r.rcvNxt = segSeq.Add(segLen)
 	logger.GetInstance().Info(logger.TCP, func() {
 	})
@@ -114,14 +116,11 @@ func (r *receiver) handleRcvdSegment(s *segment) {
 	segLen := seqnum.Size(s.data.Size())
 	segSeq := s.sequenceNumber
 
-	// TODO tcp流量控制
 	// tcp流量控制：判断该数据段的序列号是否在接收窗口内，如果不在，立即返回ack给对端。
 	if !r.acceptable(segSeq, segLen) {
 		r.ep.snd.sendAck()
 		return
 	}
-
-	//log.Println(s.data, segLen, segSeq)
 
 	// Defer segment processing if it can't be consumed now.
 	// tcp可靠性：r.consumeSegment 返回值是个bool类型，如果是true，表示已经消费该数据段，

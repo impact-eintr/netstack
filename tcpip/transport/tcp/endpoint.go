@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log"
+	"math"
 	"netstack/logger"
 	"netstack/sleep"
 	"netstack/tcpip"
@@ -128,6 +129,10 @@ type endpoint struct {
 	sndWaker      sleep.Waker
 	sndCloseWaker sleep.Waker
 
+	// cc stores the name of the Congestion Control algorithm to use for
+	// this endpoint.
+	cc CongestionControlOption
+
 	// The following are used when a "packet too big" control packet is
 	// received. They are protected by sndBufMu. They are used to
 	// communicate to the main protocol goroutine how many such control
@@ -171,7 +176,26 @@ func newEndpoint(stack *stack.Stack, netProto tcpip.NetworkProtocolNumber, waite
 		waiterQueue: waiterQueue,
 		rcvBufSize:  DefaultBufferSize,
 		sndBufSize:  DefaultBufferSize,
+		sndMTU:      int(math.MaxInt32),
 	}
+
+	var ss SendBufferSizeOption
+	if err := stack.TransportProtocolOption(ProtocolNumber, &ss); err == nil {
+		e.sndBufSize = ss.Default
+	}
+
+	var rs ReceiveBufferSizeOption
+	if err := stack.TransportProtocolOption(ProtocolNumber, &rs); err == nil {
+		e.rcvBufSize = rs.Default
+	}
+
+	var cs CongestionControlOption
+	if err := stack.TransportProtocolOption(ProtocolNumber, &cs); err == nil {
+		e.cc = cs
+	}
+
+	log.Println(e.sndBufSize, e.rcvBufSize, e.cc)
+
 	// TODO 需要添加
 	e.segmentQueue.setLimit(2 * e.rcvBufSize)
 	e.workMu.Init()
@@ -268,9 +292,48 @@ func (e *endpoint) Write(p tcpip.Payload, opts tcpip.WriteOptions) (uintptr, <-c
 		return 0, nil, nil
 	}
 	e.sndBufMu.Lock()
+	// Check if the connection has already been closed for sends.
+	if e.sndClosed {
+		e.sndBufMu.Unlock()
+		return 0, nil, tcpip.ErrClosedForSend
+	}
+
+	// tcp流量控制：未被占用发送缓存还剩多少，如果发送缓存已经被用光了，返回 ErrWouldBlock
+	avail := e.sndBufSize - e.sndBufUsed
+	if avail <= 0 {
+		e.sndBufMu.Unlock()
+		return 0, nil, tcpip.ErrWouldBlock
+	}
+
+	v, perr := p.Get(avail)
+	if perr != nil {
+		e.sndBufMu.Unlock()
+		return 0, nil, perr
+	}
+	var err *tcpip.Error
+	if p.Size() > avail { // 给的数据 缓存不足以容纳
+		err = tcpip.ErrWouldBlock
+	}
+	l := len(v)
+	s := newSegmentFromView(&e.route, e.id, v) // 分段
+	// 插入发送队列
+	e.sndBufUsed += l
+	e.sndBufInQueue += seqnum.Size(l)
+	e.sndQueue.PushBack(s)
+
 	e.sndBufMu.Unlock()
 
-	return 0, nil, nil
+	// 发送数据，最终会调用 sender sendData 来发送数据
+	if e.workMu.TryLock() {
+		// Do the work inline.
+		e.handleWrite()
+		e.workMu.Unlock()
+	} else {
+		// Let the protocol goroutine do the work.
+		e.sndWaker.Assert()
+	}
+
+	return uintptr(l), nil, err
 }
 
 func (e *endpoint) Peek([][]byte) (uintptr, tcpip.ControlMessages, *tcpip.Error) {

@@ -378,8 +378,29 @@ func (h *handshake) execute() *tcpip.Error {
 	s.AddWaker(&h.ep.newSegmentWaker, wakerForNewSegment)
 	defer s.Done()
 
+	var sackEnabled SACKEnabled
+	// 是否开启 sack
+	if err := h.ep.stack.TransportProtocolOption(ProtocolNumber, &sackEnabled); err != nil {
+		// If stack returned an error when checking for SACKEnabled
+		// status then just default to switching off SACK negotiation.
+		sackEnabled = false
+	}
+
 	// sync报文的选项参数
-	synOpts := header.TCPSynOptions{}
+	synOpts := header.TCPSynOptions{
+		WS:            h.rcvWndScale,
+		TS:            true,
+		TSVal:         h.ep.timestamp(),
+		TSEcr:         h.ep.recentTS,
+		SACKPermitted: bool(sackEnabled),
+	}
+
+	// 表示服务端收到了syn报文
+	if h.state == handshakeSynRcvd {
+		synOpts.TS = h.ep.sendTSOk
+		synOpts.SACKPermitted = h.ep.sackPermitted && bool(sackEnabled)
+	}
+
 	// 如果是客户端发送 syn 报文，如果是服务端发送 syn+ack 报文
 	sendSynTCP(&h.ep.route, h.ep.id, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
 
@@ -653,7 +674,7 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 		}
 
 		if s.flagIsSet(flagRst) {
-			// TODO 如果收到 rst 报文
+			// 如果收到 rst 报文
 			if e.rcv.acceptable(s.sequenceNumber, 0) {
 				s.decRef()
 				return tcpip.ErrConnectionReset
@@ -662,7 +683,7 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 			// 处理正常报文
 			// Patch the window size in the segment according to the
 			// send window scale.
-			//s.window <<= e.snd.sndWndScale
+			s.window <<= e.snd.sndWndScale
 
 			// If the timestamp option is negotiated and the segment
 			// does not carry a timestamp option then the segment
@@ -690,7 +711,13 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 		e.newSegmentWaker.Assert()
 	}
 
-	// TODO 需要添加
+	// tcp可靠性：累积确认
+	// 如果发送的最大ack不等于下一个接收的序列号，发送ack
+	log.Println("============", e.rcv.rcvNxt, e.snd.maxSentAck, "=============")
+	if e.rcv.rcvNxt != e.snd.maxSentAck {
+		e.snd.sendAck()
+	}
+
 	return nil
 }
 

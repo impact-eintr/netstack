@@ -1,13 +1,27 @@
 package tcp
 
 import (
-	"netstack/logger"
+	"log"
 	"netstack/sleep"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
+	"netstack/tcpip/header"
 	"netstack/tcpip/seqnum"
 	"sync"
 	"time"
+)
+
+const (
+	// minRTO is the minimum allowed value for the retransmit timeout.
+	minRTO = 200 * time.Millisecond
+
+	// InitialCwnd is the initial congestion window.
+	// 初始拥塞窗口大小
+	InitialCwnd = 10
+
+	// nDupAckThreshold is the number of duplicate ACK's required
+	// before fast-retransmit is entered.
+	nDupAckThreshold = 3
 )
 
 // NOTE 这里实现了tcp的拥塞控制 很重要
@@ -84,6 +98,12 @@ type sender struct {
 	// sndUna 是下一个未确认的序列号
 	sndUna seqnum.Value
 
+	/*
+			数据流 	下一个将要被缓存的数据          队列指针
+		[...xxxxxxxx] => sndNxtList<-->[tail       sndUna       sndNxt] ---> NIC<--->NIC
+									                          缓存队列头
+	*/
+
 	// sndNxt 是要发送的下一个段的序列号。
 	sndNxt seqnum.Value
 
@@ -144,16 +164,79 @@ type fastRecovery struct {
 // 新建并初始化发送器 irs是cookies
 func newSender(ep *endpoint, iss, irs seqnum.Value, sndWnd seqnum.Size, mss uint16, sndWndScale int) *sender {
 	s := &sender{
-		ep:         ep,
-		sndNxt:     iss + 1,
-		maxSentAck: irs + 1,
+		ep:             ep,
+		sndCwnd:        InitialCwnd,
+		sndWnd:         sndWnd,
+		sndUna:         iss + 1,
+		sndNxt:         iss + 1, // 缓存长度为0
+		sndNxtList:     iss + 1,
+		rto:            1 * time.Second,
+		lastSendTime:   time.Now(),
+		maxPayloadSize: int(mss),
+		maxSentAck:     irs + 1,
 	}
+	// A negative sndWndScale means that no scaling is in use, otherwise we
+	// store the scaling value.
+	if sndWndScale > 0 {
+		s.sndWndScale = uint8(sndWndScale)
+	}
+	s.updateMaxPayloadSize(int(ep.route.MTU()), 0)
+	s.resendTimer.init(&s.resendWaker)
 	return s
+}
+
+// updateMaxPayloadSize updates the maximum payload size based on the given
+// MTU. If this is in response to "packet too big" control packets (indicated
+// by the count argument), it also reduces the number of outstanding packets and
+// attempts to retransmit the first packet above the MTU size.
+func (s *sender) updateMaxPayloadSize(mtu, count int) {
+	m := mtu - header.TCPMinimumSize
+
+	// Calculate the maximum option size.
+	// 计算MSS的大小
+	var maxSackBlocks [header.TCPMaxSACKBlocks]header.SACKBlock
+	options := s.ep.makeOptions(maxSackBlocks[:])
+	m -= len(options)
+	putOptions(options)
+	// We don't adjust up for now.
+	if m >= s.maxPayloadSize {
+		return
+	}
+
+	// Make sure we can transmit at least one byte.
+	if m <= 0 {
+		m = 1
+	}
+
+	s.maxPayloadSize = m
+	s.outstanding -= count
+	if s.outstanding < 0 {
+		s.outstanding = 0
+	}
+
+	for seg := s.writeList.Front(); seg != nil; seg = seg.Next() {
+		log.Fatal("计算MSS ", m, s.maxPayloadSize, s.outstanding)
+		if seg == s.writeNext {
+			// We got to writeNext before we could find a segment
+			// exceeding the MTU.
+			break
+		}
+
+		if seg.data.Size() > m {
+			// We found a segment exceeding the MTU. Rewind
+			// writeNext and try to retransmit it.
+			s.writeNext = seg
+			break
+		}
+	}
+
+	// Since we likely reduced the number of outstanding packets, we may be
+	// ready to send some more.
+	s.sendData()
 }
 
 func (s *sender) sendAck() {
 	s.sendSegment(buffer.VectorisedView{}, flagAck, s.sndNxt) // seq = cookies+1 ack ack|fin.seq+1
-	logger.TODO("发送字节序")
 }
 
 // sendSegment sends a new segment containing the given payload, flags and
@@ -161,9 +244,9 @@ func (s *sender) sendAck() {
 // 根据给定的参数，负载数据、flags标记和序列号来发送数据
 func (s *sender) sendSegment(data buffer.VectorisedView, flags byte, seq seqnum.Value) *tcpip.Error {
 	s.lastSendTime = time.Now()
-	//if seq == s.rttMeasureSeqNum {
-	//	s.rttMeasureTime = s.lastSendTime
-	//}
+	if seq == s.rttMeasureSeqNum {
+		s.rttMeasureTime = s.lastSendTime
+	}
 
 	rcvNxt, rcvWnd := s.ep.rcv.getSendParams()
 
@@ -177,16 +260,22 @@ func (s *sender) sendSegment(data buffer.VectorisedView, flags byte, seq seqnum.
 func (s *sender) handleRcvdSegment(seg *segment) {
 	// 现在某些待处理数据已被确认，或者窗口打开，或者由于快速恢复期间出现重复的ack而导致拥塞窗口膨胀，
 	// 因此发送更多数据。如果需要，这也将重新启用重传计时器。
+	// 存放当前窗口大小。
+	s.sndWnd = seg.window
+
 	s.sendData()
 }
 
 // 发送数据段，最终调用 sendSegment 来发送
 func (s *sender) sendData() {
-	//log.Println(unsafe.Pointer(s.ep), "怎么又调用了一次")
+	limit := s.maxPayloadSize //最开始是65483
+
 	var seg *segment
+	end := s.sndUna.Add(s.sndWnd)
+	var dataSent bool
 	// 遍历发送链表，发送数据
 	// tcp拥塞控制：s.outstanding < s.sndCwnd 判断正在发送的数据量不能超过拥塞窗口。
-	for seg = s.writeNext; seg != nil; /*&& s.outstanding < s.sndCwnd*/ seg = seg.Next() {
+	for seg = s.writeNext; seg != nil && s.outstanding < s.sndCwnd; seg = seg.Next() {
 		// 如果seg的flags是0，将flags改为psh|ack
 		if seg.flags == 0 {
 			seg.sequenceNumber = s.sndNxt
@@ -207,8 +296,36 @@ func (s *sender) sendData() {
 			if seg.flags&flagFin != 0 {
 				panic("Netstack queues FIN segments without data.")
 			}
-			logger.TODO("发送正常的数据, 需要流量控制")
+			if !seg.sequenceNumber.LessThan(end) {
+				break
+			}
 
+			// tcp流量控制：计算最多一次发送多大数据，
+			available := int(seg.sequenceNumber.Size(end))
+			if available > limit {
+				available = limit
+			}
+
+			// 如果seg的payload字节数大于available
+			// 将seg进行分段，并且插入到该seg的后面
+			if seg.data.Size() > available {
+				nSeg := seg.clone()
+				nSeg.data.TrimFront(available)
+				nSeg.sequenceNumber.UpdateForward(seqnum.Size(available))
+				s.writeList.InsertAfter(seg, nSeg)
+				seg.data.CapLength(available)
+			}
+
+			s.outstanding++
+			log.Println("发送窗口一开始是", s.sndWnd,
+				"最多发送数据", available, dataSent,
+				"发送端缓存包数量", s.outstanding)
+			segEnd = seg.sequenceNumber.Add(seqnum.Size(seg.data.Size()))
+		}
+
+		if !dataSent { // 上面有个break能跳过这一步
+			dataSent = true
+			// TODO
 		}
 
 		s.sendSegment(seg.data, seg.flags, seg.sequenceNumber)

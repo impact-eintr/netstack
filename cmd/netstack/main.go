@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 var mac = flag.String("mac", "aa:00:01:01:01:01", "mac address to use in tap device")
@@ -143,21 +144,19 @@ func main() {
 			}
 			log.Println("服务端 建立连接")
 
-			for {
-				buf := make([]byte, 1024)
-				if _, err := conn.Read(buf); err != nil {
-					log.Println(err)
-					break
+			go func() {
+				for {
+					buf := make([]byte, 1024)
+					if _, err := conn.Read(buf); err != nil {
+						log.Println(err)
+						break
+					}
+					fmt.Println("data: ", len(buf), string(buf))
+					//	conn.Write([]byte("Server echo"))
+					//}
 				}
-				fmt.Println(string(buf))
-				//	conn.Write([]byte("Server echo"))
-				//}
-			}
-
+			}()
 		}
-		os.Exit(1)
-
-		select {}
 	}()
 
 	<-done
@@ -168,6 +167,9 @@ func main() {
 			log.Fatal(err)
 		}
 		log.Println("客户端 建立连接")
+		buf := make([]byte, 1<<21)
+		conn.Write(buf)
+		time.Sleep(3 * time.Second)
 		conn.Close()
 	}()
 
@@ -196,7 +198,6 @@ func Dial(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Address,
 	if err != nil {
 		if err == tcpip.ErrConnectStarted {
 			<-notifyCh
-			log.Println("???")
 		} else {
 			return nil, fmt.Errorf("%s", err.String())
 		}
@@ -218,6 +219,7 @@ type TcpConn struct {
 	notifyCh chan struct{}
 }
 
+// Read 读数据
 func (conn *TcpConn) Read(rcv []byte) (int, error) {
 	conn.wq.EventRegister(conn.we, waiter.EventIn)
 	defer conn.wq.EventUnregister(conn.we)
@@ -239,6 +241,7 @@ func (conn *TcpConn) Read(rcv []byte) (int, error) {
 	}
 }
 
+// Write 写数据
 func (conn *TcpConn) Write(snd []byte) error {
 	for {
 		_, notifyCh, err := conn.ep.Write(tcpip.SlicePayload(snd), tcpip.WriteOptions{To: &conn.raddr})
@@ -253,8 +256,8 @@ func (conn *TcpConn) Write(snd []byte) error {
 	}
 }
 
+// Close 关闭连接
 func (conn *TcpConn) Close() {
-	log.Println("Close")
 	conn.ep.Close()
 }
 
