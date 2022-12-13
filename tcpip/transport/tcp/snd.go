@@ -142,4 +142,9 @@ func (s *sender) sendData() {
 			s.sndNxt = segEnd
 		}
 	}
+
+	// Remember the next segment we'll write.
+	s.writeNext = seg
+
+	// TODO 启动定时器
 }

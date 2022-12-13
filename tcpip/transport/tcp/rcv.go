@@ -52,7 +52,6 @@ func (r *receiver) getSendParams() (rcvNxt seqnum.Value, rcvWnd seqnum.Size) {
 	return r.rcvNxt, r.rcvNxt.Size(r.rcvAcc) >> r.rcvWndScale
 }
 
-// FIXME 重大嫌疑 客户端为什么又发送了一个 fin|ack ??????????????????????????????????
 func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum.Size) bool {
 	if segLen > 0 {
 		// 我们期望接收到的序列号范围应该是 seqStart <= rcvNxt < seqEnd，

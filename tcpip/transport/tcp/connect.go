@@ -590,7 +590,6 @@ func (e *endpoint) sendRaw(data buffer.VectorisedView, flags byte, seq, ack seqn
 	//	sackBlocks = e.sack.Blocks[:e.sack.NumBlocks]
 	//}
 	options := e.makeOptions(sackBlocks)
-	log.Println(unsafe.Pointer(e), "怎么又调用了一次 handleWrite!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 	err := sendTCP(&e.route, e.id, data, e.route.DefaultTTL(), flags, seq, ack, rcvWnd, options)
 	putOptions(options)
 	return err
@@ -655,6 +654,19 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 			return tcpip.ErrConnectionReset
 		} else if s.flagIsSet(flagAck) {
 			// 处理正常报文
+			// Patch the window size in the segment according to the
+			// send window scale.
+			//s.window <<= e.snd.sndWndScale
+
+			// If the timestamp option is negotiated and the segment
+			// does not carry a timestamp option then the segment
+			// must be dropped as per
+			// https://tools.ietf.org/html/rfc7323#section-3.2.
+			if e.sendTSOk && !s.parsedOptions.TS {
+				e.stack.Stats().DroppedPackets.Increment()
+				s.decRef()
+				continue
+			}
 
 			// RFC 793, page 41 states that "once in the ESTABLISHED
 			// state all segments must carry current acknowledgment
