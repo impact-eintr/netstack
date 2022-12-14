@@ -188,10 +188,15 @@ func (q *Queue) EventUnregister(e *Entry) {
 // in common with the notification mask.
 func (q *Queue) Notify(mask EventMask) {
 	q.mu.RLock()
+	count := 0
 	for it := q.list.Front(); it != nil; it = it.Next() {
 		e := it.(*Entry)
 		if mask&e.mask != 0 {
 			e.Callback.Callback(e)
+		}
+		count++
+		if count > 10 {
+			panic(count)
 		}
 	}
 	q.mu.RUnlock()

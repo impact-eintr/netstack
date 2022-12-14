@@ -399,7 +399,7 @@ func (s *sender) sendData() {
 		log.Println(unsafe.Pointer(seg), seg.data.Size())
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	// TODO 启动定时器
 }

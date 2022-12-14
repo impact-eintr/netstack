@@ -172,7 +172,7 @@ func main() {
 
 		time.Sleep(time.Second)
 		log.Printf("\n\n客户端 写入数据")
-		buf := make([]byte, 1<<17)
+		buf := make([]byte, 1<<20)
 		conn.Write(buf)
 		time.Sleep(1 * time.Minute)
 		conn.Close()
@@ -194,6 +194,7 @@ func Dial(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Address,
 	var wq waiter.Queue
 	waitEntry, notifyCh := waiter.NewChannelEntry(nil)
 	wq.EventRegister(&waitEntry, waiter.EventOut)
+	defer wq.EventUnregister(&waitEntry)
 	// 新建一个tcp端
 	ep, err := s.NewEndpoint(tcp.ProtocolNumber, proto, &wq)
 	if err != nil {
@@ -248,11 +249,17 @@ func (conn *TcpConn) Read(rcv []byte) (int, error) {
 
 // Write 写数据
 func (conn *TcpConn) Write(snd []byte) error {
+	conn.wq.EventRegister(conn.we, waiter.EventOut)
+	defer conn.wq.EventUnregister(conn.we)
 	for {
-		_, notifyCh, err := conn.ep.Write(tcpip.SlicePayload(snd), tcpip.WriteOptions{To: &conn.raddr})
+		n, _, err := conn.ep.Write(tcpip.SlicePayload(snd[:]), tcpip.WriteOptions{To: &conn.raddr})
 		if err != nil {
 			if err == tcpip.ErrNoLinkAddress {
-				<-notifyCh
+				<-conn.notifyCh
+				fmt.Println("!!!!!!!!!!!!!!!!!!!asdhjfkakjhsdflkjahsdlkjfhasdkj")
+				if int(n) < len(snd) && n > 0 {
+					snd = snd[n:]
+				}
 				continue
 			}
 			return fmt.Errorf("%s", err.String())
@@ -277,7 +284,7 @@ type Listener struct {
 
 // Accept 封装tcp的accept操作
 func (l *Listener) Accept() (*TcpConn, error) {
-	l.wq.EventRegister(l.we, waiter.EventIn)
+	l.wq.EventRegister(l.we, waiter.EventIn|waiter.EventOut)
 	defer l.wq.EventUnregister(l.we)
 	for {
 		ep, wq, err := l.ep.Accept()
