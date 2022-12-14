@@ -264,12 +264,12 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 	// 因此发送更多数据。如果需要，这也将重新启用重传计时器。
 	// 存放当前窗口大小。
 	s.sndWnd = seg.window
-	log.Println(s.ep.id.LocalPort, "移动窗口", s.sndWnd)
+	//log.Println(s.ep.id.LocalPort, "移动窗口", s.sndWnd)
 	// 获取确认号
 	ack := seg.ackNumber
 	// 如果ack在最小未确认的seq和segNext之间
 	if (ack - 1).InRange(s.sndUna, s.sndNxt) {
-		log.Printf("[...XXXXXX]-[%d|\t%d\t|%d]==>", s.sndNxt, ack-1, s.sndUna)
+		//log.Printf("[...XXXXXX]-[%d|\t%d\t|%d]==>", s.sndNxt, ack-1, s.sndUna)
 		if s.ep.sendTSOk && seg.parsedOptions.TSEcr != 0 {
 			// TSVal/Ecr values sent by Netstack are at a millisecond
 			// granularity.
@@ -294,9 +294,7 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 				break
 			}
 
-			log.Println(s.writeNext == seg)
 			if s.writeNext == seg {
-				log.Fatal("更新 下一段")
 				s.writeNext = seg.Next()
 			}
 			// 从发送链表中删除已确认的tcp段。
@@ -368,8 +366,8 @@ func (s *sender) sendData() {
 			// 如果seg的payload字节数大于available
 			// 将seg进行分段，并且插入到该seg的后面
 			if seg.data.Size() > available {
-				log.Println("-------------------------------------分段！！！", seg.data.Size(), available, end)
 				nSeg := seg.clone()
+				nSeg.data.TrimFront(available) // NOTE 删掉用过的
 				nSeg.sequenceNumber.UpdateForward(seqnum.Size(available))
 				s.writeList.InsertAfter(seg, nSeg)
 				seg.data.CapLength(available)
@@ -398,7 +396,6 @@ func (s *sender) sendData() {
 	// Remember the next segment we'll write.
 	s.writeNext = seg
 	if seg != nil {
-		log.Println("-------------------------------------分段！！！", s.writeNext.data.Size())
 		log.Println(unsafe.Pointer(seg), seg.data.Size())
 	}
 
