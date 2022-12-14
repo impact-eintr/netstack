@@ -82,15 +82,34 @@ const (
 // 根据这些参数生成 syn+ack 报文的选项参数，附在 tcp 选项中，回复给主机 A。
 func newHandshake(ep *endpoint, rcvWnd seqnum.Size) (handshake, *tcpip.Error) {
 	h := handshake{
-		ep:     ep,
-		active: true,   // 激活这个管理器
-		rcvWnd: rcvWnd, // 初始接收窗口
-		// TODO
+		ep:          ep,
+		active:      true,                 // 激活这个管理器
+		rcvWnd:      rcvWnd,               // 初始接收窗口
+		rcvWndScale: FindWndScale(rcvWnd), // 接收窗口扩展因子
 	}
 	if err := h.resetState(); err != nil {
 		return handshake{}, err
 	}
 	return h, nil
+}
+
+// FindWndScale determines the window scale to use for the given maximum window
+// size.
+// 因为窗口的大小不能超过序列号范围的一半，即窗口最大2^30,
+// so (2^16)*(2^maxWnsScale) < 2^30,get maxWnsScale = 14
+func FindWndScale(wnd seqnum.Size) int {
+	if wnd < 0x10000 {
+		return 0
+	}
+
+	max := seqnum.Size(0xffff)
+	s := 0
+	for wnd > max && s < header.MaxWndScale {
+		s++
+		max <<= 1
+	}
+
+	return s
 }
 
 func (h *handshake) resetState() *tcpip.Error {
@@ -301,7 +320,7 @@ func (h *handshake) synRcvdState(s *segment) *tcpip.Error {
 func (h *handshake) handleSegment(s *segment) *tcpip.Error {
 	h.sndWnd = s.window
 	if !s.flagIsSet(flagSyn) && h.sndWndScale > 0 {
-		h.sndWnd <<= uint8(h.sndWndScale)
+		h.sndWnd <<= uint8(h.sndWndScale) // 收紧窗口
 	}
 
 	switch h.state {
@@ -619,13 +638,13 @@ func (e *endpoint) sendRaw(data buffer.VectorisedView, flags byte, seq, ack seqn
 func (e *endpoint) handleWrite() *tcpip.Error {
 	e.sndBufMu.Lock()
 
-	// 得到第一个tcp段
+	// 得到第一个tcp段 注意并不是取出只是查看
 	first := e.sndQueue.Front()
 	if first != nil {
 		// 向发送链表添加元素
 		e.snd.writeList.PushBackList(&e.sndQueue)
 		// NOTE 更新发送队列下一个发送字节的序号 一次性将链表全部取用
-		// 当有新的数据需要发送时会有相关逻辑更新这个数值
+		// 当有新的数据需要发送时会有相逻辑更新这个数值
 		e.snd.sndNxtList.UpdateForward(e.sndBufInQueue)
 		e.sndBufInQueue = 0
 	}
@@ -684,7 +703,6 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 			// Patch the window size in the segment according to the
 			// send window scale.
 			s.window <<= e.snd.sndWndScale
-
 			// If the timestamp option is negotiated and the segment
 			// does not carry a timestamp option then the segment
 			// must be dropped as per
@@ -713,8 +731,8 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 
 	// tcp可靠性：累积确认
 	// 如果发送的最大ack不等于下一个接收的序列号，发送ack
-	log.Println("============", e.rcv.rcvNxt, e.snd.maxSentAck, "=============")
 	if e.rcv.rcvNxt != e.snd.maxSentAck {
+		fmt.Printf("\n\n=======ACK=======%d=======ACK======\n\n", e.rcv.rcvNxt-e.snd.maxSentAck)
 		e.snd.sendAck()
 	}
 

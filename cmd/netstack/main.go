@@ -147,11 +147,12 @@ func main() {
 			go func() {
 				for {
 					buf := make([]byte, 1024)
-					if _, err := conn.Read(buf); err != nil {
+					n, err := conn.Read(buf)
+					if err != nil {
 						log.Println(err)
 						break
 					}
-					fmt.Println("data: ", len(buf), string(buf))
+					fmt.Println("data: ", n, len(buf), string(buf))
 					//	conn.Write([]byte("Server echo"))
 					//}
 				}
@@ -160,16 +161,20 @@ func main() {
 	}()
 
 	<-done
+
 	go func() {
 		port := localPort
 		conn, err := Dial(s, header.IPv4ProtocolNumber, addr, port)
 		if err != nil {
 			log.Fatal(err)
 		}
-		log.Println("客户端 建立连接")
-		buf := make([]byte, 1<<21)
+		log.Printf("客户端 建立连接\n")
+
+		time.Sleep(time.Second)
+		log.Printf("\n\n客户端 写入数据")
+		buf := make([]byte, 1<<17)
 		conn.Write(buf)
-		time.Sleep(3 * time.Second)
+		time.Sleep(1 * time.Minute)
 		conn.Close()
 	}()
 
@@ -237,7 +242,7 @@ func (conn *TcpConn) Read(rcv []byte) (int, error) {
 			n = cap(rcv)
 		}
 		rcv = append(rcv[:0], buf[:n]...)
-		return n, nil
+		return len(buf), nil
 	}
 }
 

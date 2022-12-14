@@ -21,11 +21,10 @@ func (v Value) LessThanEq(w Value) bool {
 
 // InRange v ∈ [a, b)
 func (v Value) InRange(a, b Value) bool {
-	//return a <= v && v < b
-	return v-a < b-a
+	return v-a < b-a // 注意 uint32(-1) > uint32(0)
 }
 
-// InWindows check v in [first, first+size)
+// InWindow check v in [first, first+size)
 func (v Value) InWindow(first Value, size Size) bool {
 	return v.InRange(first, first.Add(size))
 }

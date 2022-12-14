@@ -9,6 +9,7 @@ import (
 	"netstack/tcpip/seqnum"
 	"sync"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -253,6 +254,7 @@ func (s *sender) sendSegment(data buffer.VectorisedView, flags byte, seq seqnum.
 	// Remember the max sent ack.
 	s.maxSentAck = rcvNxt
 
+	log.Println(s.ep.id.LocalPort, "要求扩展窗口", s.sndWnd)
 	return s.ep.sendRaw(data, flags, seq, rcvNxt, rcvWnd)
 }
 
@@ -262,6 +264,62 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 	// 因此发送更多数据。如果需要，这也将重新启用重传计时器。
 	// 存放当前窗口大小。
 	s.sndWnd = seg.window
+	log.Println(s.ep.id.LocalPort, "移动窗口", s.sndWnd)
+	// 获取确认号
+	ack := seg.ackNumber
+	// 如果ack在最小未确认的seq和segNext之间
+	if (ack - 1).InRange(s.sndUna, s.sndNxt) {
+		log.Printf("[...XXXXXX]-[%d|\t%d\t|%d]==>", s.sndNxt, ack-1, s.sndUna)
+		if s.ep.sendTSOk && seg.parsedOptions.TSEcr != 0 {
+			// TSVal/Ecr values sent by Netstack are at a millisecond
+			// granularity.
+			//elapsed := time.Duration(s.ep.timestamp()-seg.parsedOptions.TSEcr) * time.Millisecond
+			//s.updateRTO(elapsed)
+		}
+		// 获取这次确认的字节数，即 ack - snaUna
+		acked := s.sndUna.Size(ack)
+		// 更新下一个未确认的序列号
+		s.sndUna = ack
+
+		ackLeft := acked
+		//originalOutstanding := s.outstanding
+		// 从发送链表中删除已经确认的数据，发送窗口的滑动。
+		//log.Printf("[...XXXXXX]-[%d|\t\t|%d]==>", s.sndNxt, s.sndUna)
+		for ackLeft > 0 { // 有成功确认的数据 丢弃它们 有剩余数据的话继续发送(根据拥塞策略控制)
+			seg := s.writeList.Front()
+			datalen := seg.logicalLen()
+
+			if datalen > ackLeft {
+				seg.data.TrimFront(int(ackLeft))
+				break
+			}
+
+			log.Println(s.writeNext == seg)
+			if s.writeNext == seg {
+				log.Fatal("更新 下一段")
+				s.writeNext = seg.Next()
+			}
+			// 从发送链表中删除已确认的tcp段。
+			s.writeList.Remove(seg)
+			// 因为有一个tcp段确认了，所以 outstanding 减1
+			s.outstanding--
+			seg.decRef()
+			ackLeft -= datalen
+		}
+		// 当收到ack确认时，需要更新发送缓冲占用
+		s.ep.updateSndBufferUsage(int(acked))
+
+		// 如果发生超时重传时，s.outstanding可能会降到零以下，
+		// 重置为零但后来得到一个覆盖先前发送数据的确认。
+		if s.outstanding < 0 {
+			s.outstanding = 0
+		}
+	}
+
+	// TODO tcp拥塞控制
+	if s.writeList.Front() != nil {
+		log.Println("确认成功 继续发送")
+	}
 
 	s.sendData()
 }
@@ -297,6 +355,7 @@ func (s *sender) sendData() {
 				panic("Netstack queues FIN segments without data.")
 			}
 			if !seg.sequenceNumber.LessThan(end) {
+				log.Println("暂停数据发送", seg.sequenceNumber, end)
 				break
 			}
 
@@ -309,18 +368,19 @@ func (s *sender) sendData() {
 			// 如果seg的payload字节数大于available
 			// 将seg进行分段，并且插入到该seg的后面
 			if seg.data.Size() > available {
+				log.Println("-------------------------------------分段！！！", seg.data.Size(), available, end)
 				nSeg := seg.clone()
-				nSeg.data.TrimFront(available)
 				nSeg.sequenceNumber.UpdateForward(seqnum.Size(available))
 				s.writeList.InsertAfter(seg, nSeg)
 				seg.data.CapLength(available)
 			}
 
 			s.outstanding++
-			log.Println("发送窗口一开始是", s.sndWnd,
-				"最多发送数据", available, dataSent,
-				"发送端缓存包数量", s.outstanding)
 			segEnd = seg.sequenceNumber.Add(seqnum.Size(seg.data.Size()))
+			log.Println("发送窗口一开始是", s.sndWnd,
+				"最多发送数据", available,
+				"缓存数据尾", segEnd,
+				"发送端缓存包数量", s.outstanding)
 		}
 
 		if !dataSent { // 上面有个break能跳过这一步
@@ -331,12 +391,18 @@ func (s *sender) sendData() {
 		s.sendSegment(seg.data, seg.flags, seg.sequenceNumber)
 		// 发送一个数据段后，更新sndNxt
 		if s.sndNxt.LessThan(segEnd) {
+			log.Println("更新sndNxt", s.sndNxt, segEnd)
 			s.sndNxt = segEnd
 		}
 	}
-
 	// Remember the next segment we'll write.
 	s.writeNext = seg
+	if seg != nil {
+		log.Println("-------------------------------------分段！！！", s.writeNext.data.Size())
+		log.Println(unsafe.Pointer(seg), seg.data.Size())
+	}
+
+	time.Sleep(200 * time.Millisecond)
 
 	// TODO 启动定时器
 }

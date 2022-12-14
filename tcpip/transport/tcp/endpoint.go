@@ -818,6 +818,19 @@ func (e *endpoint) HandleControlPacket(id stack.TransportEndpointID, typ stack.C
 
 }
 
+// 当收到ack确认时 需要更新发送确认缓冲占用
+func (e *endpoint) updateSndBufferUsage(v int) {
+	e.sndBufMu.Lock()
+	notify := e.sndBufUsed >= e.sndBufSize>>1
+	e.sndBufUsed -= v
+	notify = notify && e.sndBufUsed < e.sndBufSize>>1
+	e.sndBufMu.Unlock()
+	if notify { // 如果缓存中剩余的数据过多是不需要补充的
+		log.Fatal("缓存中剩余的数据", e.sndBufUsed, notify)
+		e.waiterQueue.Notify(waiter.EventOut)
+	}
+}
+
 func (e *endpoint) readyToRead(s *segment) {
 	e.rcvListMu.Lock()
 	if s != nil {
@@ -840,14 +853,11 @@ func (e *endpoint) receiveBufferAvailable() int {
 	size := e.rcvBufSize
 	used := e.rcvBufUsed
 	e.rcvListMu.Unlock()
-
 	// We may use more bytes than the buffer size when the receive buffer
 	// shrinks.
 	if used >= size {
 		return 0
 	}
-
-	log.Println("Init Recv Windeow Size: ", size-used)
 	return size - used
 }
 

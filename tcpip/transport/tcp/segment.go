@@ -114,6 +114,20 @@ func (s *segment) incRef() {
 	atomic.AddInt32(&s.refCnt, 1)
 }
 
+// logicalLen is the segment length in the sequence number space. It's defined
+// as the data length plus one for each of the SYN and FIN bits set.
+// 计算tcp段的逻辑长度，包括负载数据的长度，如果有控制标记，需要加1
+func (s *segment) logicalLen() seqnum.Size {
+	l := seqnum.Size(s.data.Size())
+	if s.flagIsSet(flagSyn) {
+		l++
+	}
+	if s.flagIsSet(flagFin) {
+		l++
+	}
+	return l
+}
+
 func (s *segment) parse() bool {
 	h := header.TCP(s.data.First())
 	offset := int(h.DataOffset())

@@ -58,6 +58,7 @@ func (r *receiver) getSendParams() (rcvNxt seqnum.Value, rcvWnd seqnum.Size) {
 		r.rcvAcc = acc
 	}
 
+	log.Println("-------------", n, acc, r.rcvWndScale)
 	return r.rcvNxt, r.rcvNxt.Size(r.rcvAcc) >> r.rcvWndScale
 }
 
