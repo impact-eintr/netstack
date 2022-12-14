@@ -172,7 +172,7 @@ func main() {
 
 		time.Sleep(time.Second)
 		log.Printf("\n\n客户端 写入数据")
-		buf := make([]byte, 1<<20)
+		buf := make([]byte, 1<<21)
 		conn.Write(buf)
 		time.Sleep(1 * time.Minute)
 		conn.Close()
@@ -252,11 +252,11 @@ func (conn *TcpConn) Write(snd []byte) error {
 	conn.wq.EventRegister(conn.we, waiter.EventOut)
 	defer conn.wq.EventUnregister(conn.we)
 	for {
-		n, _, err := conn.ep.Write(tcpip.SlicePayload(snd[:]), tcpip.WriteOptions{To: &conn.raddr})
+		n, _, err := conn.ep.Write(tcpip.SlicePayload(snd), tcpip.WriteOptions{To: &conn.raddr})
 		if err != nil {
-			if err == tcpip.ErrNoLinkAddress {
+			if err == tcpip.ErrWouldBlock {
+				fmt.Println("阻塞力!!!!!!!!!!!!!!!!!")
 				<-conn.notifyCh
-				fmt.Println("!!!!!!!!!!!!!!!!!!!asdhjfkakjhsdflkjahsdlkjfhasdkj")
 				if int(n) < len(snd) && n > 0 {
 					snd = snd[n:]
 				}
