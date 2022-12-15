@@ -169,3 +169,14 @@ func (r *receiver) handleRcvdSegment(s *segment) {
 		break
 	}
 }
+
+/*
+											 +-------> rcvWnd <-------+
+											 |                        |
+-----------------+-------------+-------------+------------------------+
+| acked not read | not revived |  rcvd unack |   able rcv             |
+-----------------+-------------+-------------+------------------------+
+^                                            ^
+|                                            |
+LastByteRead                          LastByteRecv
+*/
