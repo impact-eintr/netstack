@@ -297,8 +297,6 @@ var ipv4Fmt string = `
 %v
 `
 
-type Types []struct{}
-
 func atoi[T int | int8 | int16 | int32 | int64 | uint | uint8 | uint16 | uint32](i T) string {
 	return fmt.Sprintf("%d", i)
 }

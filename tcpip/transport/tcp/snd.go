@@ -1,6 +1,7 @@
 package tcp
 
 import (
+	"fmt"
 	"log"
 	"math"
 	"netstack/sleep"
@@ -54,6 +55,19 @@ type congestionControl interface {
 	// 这为拥塞控制算法提供了一种在退出恢复时调整其状态的方法。
 	PostRecovery()
 }
+
+/*
+                     +-------> sndWnd <-------+
+                     |                        |
+---------------------+-------------+----------+--------------------
+|      acked         | * * * * * * | # # # # #|   unable send
+---------------------+-------------+----------+--------------------
+                     ^             ^
+                     |             |
+                   sndUna        sndNxt
+***** in flight data
+##### able send date
+*/
 
 // tcp发送器，它维护了tcp必要的状态
 type sender struct {
@@ -337,7 +351,6 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 	// 因此发送更多数据。如果需要，这也将重新启用重传计时器。
 	// 存放当前窗口大小。
 	s.sndWnd = seg.window
-	log.Println(s.ep.id.LocalPort, "移动窗口", s.sndWnd)
 	// 获取确认号
 	ack := seg.ackNumber
 	// 如果ack在最小未确认的seq和segNext之间
@@ -389,7 +402,8 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 
 	// TODO tcp拥塞控制
 	if s.writeList.Front() != nil {
-		log.Fatal("确认成功 继续发送")
+		log.Println(s)
+		//log.Fatal(s.sndNxt, " 确认成功 继续发送 ", seg.sequenceNumber)
 	}
 
 	s.sendData()
@@ -426,7 +440,7 @@ func (s *sender) sendData() {
 				panic("Netstack queues FIN segments without data.")
 			}
 			if !seg.sequenceNumber.LessThan(end) {
-				log.Println("暂停数据发送", seg.sequenceNumber, end)
+				log.Println("暂停数据发送 等待确认标号", seg.sequenceNumber, " 已收到 。。。。")
 				break
 			}
 
@@ -462,7 +476,7 @@ func (s *sender) sendData() {
 		s.sendSegment(seg.data, seg.flags, seg.sequenceNumber)
 		// 发送一个数据段后，更新sndNxt
 		if s.sndNxt.LessThan(segEnd) {
-			log.Println("更新sndNxt", s.sndNxt, segEnd)
+			log.Println("更新sndNxt", s.sndNxt, " 为 ", segEnd, "下一次发送的数据头为", segEnd)
 			s.sndNxt = segEnd
 		}
 	}
@@ -474,5 +488,31 @@ func (s *sender) sendData() {
 
 	time.Sleep(10 * time.Millisecond)
 
-	// TODO 启动定时器
+	// 如果重传定时器没有启动 且 sndUna != sndNxt 启动定时器
+	if !s.resendTimer.enabled() && s.sndUna != s.sndNxt {
+		s.resendTimer.enable(s.rto)
+	}
+
+	// TODO KEEPALIVE
+
+}
+
+var fmtSender string = `
+                 +----->  % 10s  <------+
+                 |                           |
+-----------------+-------------+-------------+------------------
+|      已确认    |UAC% 10s|NXT% 10s|   不可发送
+-----------------+-------------+-------------+------------------
+                 ^             ^
+                 |             |
+             % 10s    % 10s`
+
+func (s sender) String() string {
+	return fmt.Sprintf(fmtSender, atoi(uint32(s.sndWnd)),
+		atoi(uint32(s.sndNxt-s.sndUna)), atoi(s.ep.sndBufUsed),
+		atoi(uint32(s.sndUna)), atoi(uint32(s.sndNxt)))
+}
+
+func atoi[T int | int8 | int16 | int32 | int64 | uint | uint8 | uint16 | uint32](i T) string {
+	return fmt.Sprintf("%d", i)
 }

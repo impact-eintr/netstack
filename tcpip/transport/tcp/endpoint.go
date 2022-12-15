@@ -827,7 +827,7 @@ func (e *endpoint) updateSndBufferUsage(v int) {
 	e.sndBufMu.Unlock()
 	if notify { // 如果缓存中剩余的数据过多是不需要补充的
 		e.waiterQueue.Notify(waiter.EventOut)
-		fmt.Println("提醒继续写入")
+		//log.Println("提醒 用户层的 Write() 继续写入")
 	}
 }
 
