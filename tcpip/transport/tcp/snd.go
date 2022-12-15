@@ -2,6 +2,7 @@ package tcp
 
 import (
 	"log"
+	"math"
 	"netstack/sleep"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
@@ -240,6 +241,72 @@ func (s *sender) sendAck() {
 	s.sendSegment(buffer.VectorisedView{}, flagAck, s.sndNxt) // seq = cookies+1 ack ack|fin.seq+1
 }
 
+// updateRTO 根据rtt来更新计算rto
+/*
+第一次rtt计算：
+SRTT = R
+RTTVAR = R/2
+RTO = SRTT + max (G, K*RTTVAR) = R + max(G, 2 * R)
+K = 4
+
+之后：
+RTTVAR = (1 - beta) * RTTVAR + beta * |SRTT - R'| = 0.75 * RTTVAR + 0.25 * |SRTT - R'|
+SRTT = (1 - alpha) * SRTT + alpha * R' = 0.875 * SRTT + 0.125 * R'
+RTO = SRTT + max (G, K*RTTVAR) = SRTT + max(G, 4 * RTTVAR)
+K = 4
+*/
+func (s *sender) updateRTO(rtt time.Duration) {
+	s.rtt.Lock()
+	// 第一次计算
+	if !s.srttInited {
+		s.rtt.srtt = rtt
+		s.rtt.rttvar = rtt / 2
+		s.srttInited = true
+	} else {
+		log.Println("之后的计算")
+		// |rtt-srtt| 标准差
+		diff := s.rtt.srtt - rtt
+		if diff < 0 {
+			diff = -diff
+		}
+		if !s.ep.sendTSOk {
+			s.rtt.rttvar = (3*s.rtt.rttvar + diff) / 4
+			s.rtt.srtt = (7*s.rtt.srtt + rtt) / 8
+		} else {
+			// When we are taking RTT measurements of every ACK then
+			// we need to use a modified method as specified in
+			// https://tools.ietf.org/html/rfc7323#appendix-G
+			if s.outstanding == 0 {
+				s.rtt.Unlock()
+				return
+			}
+			// Netstack measures congestion window/inflight all in
+			// terms of packets and not bytes. This is similar to
+			// how linux also does cwnd and inflight. In practice
+			// this approximation works as expected.
+			expectedSamples := math.Ceil(float64(s.outstanding) / 2)
+
+			// alpha & beta values are the original values as recommended in
+			// https://tools.ietf.org/html/rfc6298#section-2.3.
+			const alpha = 0.125
+			const beta = 0.25
+
+			alphaPrime := alpha / expectedSamples
+			betaPrime := beta / expectedSamples
+			rttVar := (1-betaPrime)*s.rtt.rttvar.Seconds() + betaPrime*diff.Seconds()
+			srtt := (1-alphaPrime)*s.rtt.srtt.Seconds() + alphaPrime*rtt.Seconds()
+			s.rtt.rttvar = time.Duration(rttVar * float64(time.Second))
+			s.rtt.srtt = time.Duration(srtt * float64(time.Second))
+		}
+	}
+
+	s.rto = s.rtt.srtt + 4*s.rtt.rttvar
+	s.rtt.Unlock()
+	if s.rto < minRTO {
+		s.rto = minRTO
+	}
+}
+
 // sendSegment sends a new segment containing the given payload, flags and
 // sequence number.
 // 根据给定的参数，负载数据、flags标记和序列号来发送数据
@@ -260,6 +327,12 @@ func (s *sender) sendSegment(data buffer.VectorisedView, flags byte, seq seqnum.
 
 // 收到段时调用 handleRcvdSegment 它负责更新与发送相关的状态
 func (s *sender) handleRcvdSegment(seg *segment) {
+	// 如果rtt测量seq小于ack num，更新rto
+	if !s.ep.sendTSOk && s.rttMeasureSeqNum.LessThan(seg.ackNumber) {
+		s.updateRTO(time.Now().Sub(s.rttMeasureTime))
+		s.rttMeasureSeqNum = s.sndNxt
+	}
+
 	// 现在某些待处理数据已被确认，或者窗口打开，或者由于快速恢复期间出现重复的ack而导致拥塞窗口膨胀，
 	// 因此发送更多数据。如果需要，这也将重新启用重传计时器。
 	// 存放当前窗口大小。
