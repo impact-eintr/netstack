@@ -732,7 +732,7 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 	// tcp可靠性：累积确认
 	// 如果发送的最大ack不等于下一个接收的序列号，发送ack
 	if e.rcv.rcvNxt != e.snd.maxSentAck {
-		fmt.Printf("\n\n=======ACK=======%d=======ACK======\n\n", e.rcv.rcvNxt-e.snd.maxSentAck)
+		fmt.Printf("\n=======ACK=======%d=======ACK======\n\n", e.rcv.rcvNxt-e.snd.maxSentAck)
 		e.snd.sendAck()
 	}
 

@@ -254,7 +254,7 @@ func (s *sender) sendSegment(data buffer.VectorisedView, flags byte, seq seqnum.
 	// Remember the max sent ack.
 	s.maxSentAck = rcvNxt
 
-	log.Println(s.ep.id.LocalPort, "要求扩展窗口", s.sndWnd)
+	log.Println(s.ep.id.LocalPort, "要求扩展窗口", rcvWnd)
 	return s.ep.sendRaw(data, flags, seq, rcvNxt, rcvWnd)
 }
 
@@ -264,7 +264,7 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 	// 因此发送更多数据。如果需要，这也将重新启用重传计时器。
 	// 存放当前窗口大小。
 	s.sndWnd = seg.window
-	//log.Println(s.ep.id.LocalPort, "移动窗口", s.sndWnd)
+	log.Println(s.ep.id.LocalPort, "移动窗口", s.sndWnd)
 	// 获取确认号
 	ack := seg.ackNumber
 	// 如果ack在最小未确认的seq和segNext之间
@@ -316,7 +316,7 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 
 	// TODO tcp拥塞控制
 	if s.writeList.Front() != nil {
-		log.Println("确认成功 继续发送")
+		log.Fatal("确认成功 继续发送")
 	}
 
 	s.sendData()

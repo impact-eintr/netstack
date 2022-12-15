@@ -1,6 +1,7 @@
 package tcp
 
 import (
+	"container/heap"
 	"log"
 	"netstack/logger"
 	"netstack/tcpip/seqnum"
@@ -58,7 +59,7 @@ func (r *receiver) getSendParams() (rcvNxt seqnum.Value, rcvWnd seqnum.Size) {
 		r.rcvAcc = acc
 	}
 
-	log.Println("-------------", n, acc, r.rcvWndScale)
+	log.Println("-------------", n, acc, r.rcvNxt.Size(r.rcvAcc)>>r.rcvWndScale)
 	return r.rcvNxt, r.rcvNxt.Size(r.rcvAcc) >> r.rcvWndScale
 }
 
@@ -90,6 +91,9 @@ func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum
 	logger.GetInstance().Info(logger.TCP, func() {
 	})
 
+	// 修剪SACK块以删除任何涵盖已消耗序列号的SACK信息。
+	TrimSACKBlockList(&r.ep.sack, r.rcvNxt)
+
 	// 如果收到 fin 报文
 	if s.flagIsSet(flagFin) {
 		// 控制报文消耗一个字节的序列号，因此这边期望下次收到的序列号加1
@@ -102,6 +106,15 @@ func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum
 		// 触发上层应用可以读取
 		r.closed = true
 		r.ep.readyToRead(nil)
+		first := 0
+		if len(r.pendingRcvdSegments) != 0 && r.pendingRcvdSegments[0] == s {
+			first = 1
+		}
+
+		for i := first; i < len(r.pendingRcvdSegments); i++ {
+			r.pendingRcvdSegments[i].decRef()
+		}
+		r.pendingRcvdSegments = r.pendingRcvdSegments[:first]
 	}
 
 	return true
@@ -127,7 +140,32 @@ func (r *receiver) handleRcvdSegment(s *segment) {
 	// tcp可靠性：r.consumeSegment 返回值是个bool类型，如果是true，表示已经消费该数据段，
 	// 如果不是，那么进行下面的处理，插入到 pendingRcvdSegments，且进行堆排序
 	if !r.consumeSegment(s, segSeq, segLen) {
+		// 如果有负载数据或者是 fin 报文，立即回复一个 ack 报文
+		if segLen > 0 || s.flagIsSet(flagFin) {
+			// We only store the segment if it's within our buffer
+			// size limit.
+			// tcp可靠性：对于乱序的tcp段，应该在等待处理段中缓存
+			if r.pendingBufUsed < r.pendingBufSize {
+				r.pendingBufUsed += s.logicalLen()
+				s.incRef()
+				// 插入堆中，且进行排序
+				heap.Push(&r.pendingRcvdSegments, s)
+			}
+
+			// tcp的可靠性：更新 sack 块信息
+			//UpdateSACKBlocks(&r.ep.sack, segSeq, segSeq.Add(segLen), r.rcvNxt)
+
+			// Immediately send an ack so that the peer knows it may
+			// have to retransmit.
+			r.ep.snd.sendAck()
+		}
 		return
 	}
 
+	// tcp的可靠性：通过使用当前段，我们可能填补了序列号域中的间隙，该间隙允许现在使用待处理段。
+	// 所以试着去消费等待处理段。
+	for !r.closed && r.pendingRcvdSegments.Len() > 0 {
+		log.Fatal("&&&&&&&&&&&&&&&&&&&&&&&")
+		break
+	}
 }

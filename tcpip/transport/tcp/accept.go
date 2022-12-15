@@ -249,6 +249,10 @@ func (l *listenContext) createEndpointAndPerformHandshake(s *segment, opts *head
 	}
 
 	// TODO 更新接收窗口扩张因子
+	ep.rcv.rcvWndScale = h.effectiveRcvWndScale()
+	logger.GetInstance().Info(logger.HANDSHAKE, func() {
+		log.Println("rp.rcv.rcvWndScale", ep.rcv.rcvWndScale)
+	})
 
 	return ep, nil
 }
