@@ -212,10 +212,10 @@ func (l *listenContext) createConnectedEndpoint(s *segment, iss seqnum.Value,
 	// The receiver at least temporarily has a zero receive window scale,
 	// but the caller may change it (before starting the protocol loop).
 	n.snd = newSender(n, iss, irs, s.window, rcvdSynOpts.MSS, rcvdSynOpts.WS)
-	logger.GetInstance().Info(logger.HANDSHAKE, func() {
-		//log.Println("服务端握手成功 服务端的sender", n.snd)
-	})
 	n.rcv = newReceiver(n, irs, l.rcvWnd, 0)
+	logger.GetInstance().Info(logger.HANDSHAKE, func() {
+		log.Println("服务端握手成功 服务端的recver", n.rcv)
+	})
 
 	return n, nil
 }

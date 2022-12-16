@@ -92,8 +92,6 @@ func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum
 	logger.GetInstance().Info(logger.TCP, func() {
 	})
 
-	logger.GetInstance().Info(logger.TCP, func() {
-	})
 	if r.ep.id.LocalPort == 9999 {
 		log.Println(r)
 	}
@@ -148,6 +146,7 @@ func (r *receiver) handleRcvdSegment(s *segment) {
 	// tcp可靠性：r.consumeSegment 返回值是个bool类型，如果是true，表示已经消费该数据段，
 	// 如果不是，那么进行下面的处理，插入到 pendingRcvdSegments，且进行堆排序
 	if !r.consumeSegment(s, segSeq, segLen) {
+		log.Fatal("接受空间告急!!!", r.ep.receiveBufferAvailable())
 		// 如果有负载数据或者是 fin 报文，立即回复一个 ack 报文
 		if segLen > 0 || s.flagIsSet(flagFin) {
 			// We only store the segment if it's within our buffer

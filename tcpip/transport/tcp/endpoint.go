@@ -15,6 +15,7 @@ import (
 	"netstack/tmutex"
 	"netstack/waiter"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,6 +31,17 @@ const (
 	stateConnected
 	stateClosed
 	stateError
+)
+
+// Reasons for notifying the protocol goroutine.
+const (
+	notifyNonZeroReceiveWindow = 1 << iota
+	notifyReceiveWindowChanged
+	notifyClose
+	notifyMTUChanged
+	notifyDrain
+	notifyReset
+	notifyKeepaliveChanged
 )
 
 // SACKInfo holds TCP SACK related information for a given endpoint.
@@ -140,14 +152,18 @@ type endpoint struct {
 	packetTooBigCount int
 	sndMTU            int
 
-	// notificationWaker is used to indicate to the protocol goroutine that
-	// it needs to wake up and check for notifications.
-	notificationWaker sleep.Waker
-
 	// newSegmentWaker is used to indicate to the protocol goroutine that
 	// it needs to wake up and handle new segments queued to it.
 	// HandlePacket收到segment后通知处理的事件驱动器
 	newSegmentWaker sleep.Waker
+
+	// notificationWaker is used to indicate to the protocol goroutine that
+	// it needs to wake up and check for notifications.
+	notificationWaker sleep.Waker
+
+	// notifyFlags is a bitmask of flags used to indicate to the protocol
+	// goroutine what it was notified; this is only accessed atomically.
+	notifyFlags uint32
 
 	// acceptedChan is used by a listening endpoint protocol goroutine to
 	// send newly accepted connections to the endpoint so that they can be
@@ -198,6 +214,31 @@ func newEndpoint(stack *stack.Stack, netProto tcpip.NetworkProtocolNumber, waite
 	e.workMu.Lock()
 	e.tsOffset = timeStampOffset() // 随机偏移
 	return e
+}
+
+func (e *endpoint) fetchNotifications() uint32 {
+	return atomic.SwapUint32(&e.notifyFlags, 0)
+}
+
+// 通知订阅消息的任务开始工作
+func (e *endpoint) notifyProtocolGoroutine(n uint32) {
+	for {
+		v := atomic.LoadUint32(&e.notifyFlags)
+		if v&n == n {
+			// The flags are already set.
+			return
+		}
+
+		if atomic.CompareAndSwapUint32(&e.notifyFlags, v, v|n) {
+			if v == 0 {
+				// We are causing a transition from no flags to
+				// at least one flag set, so we must cause the
+				// protocol goroutine to wake up.
+				e.notificationWaker.Assert()
+			}
+			return
+		}
+	}
 }
 
 func (e *endpoint) Close() {
@@ -261,11 +302,14 @@ func (e *endpoint) readLocked() (buffer.View, *tcpip.Error) {
 		e.rcvList.Remove(s)
 		s.decRef()
 	}
-	logger.GetInstance().Info(logger.TCP, func() {
-		log.Println("读到了数据", views, v)
-	})
-	// TODO 流量检测
+
+	scale := e.rcv.rcvWndScale
+	// 检测接收窗口是否为0
+	wasZero := e.zeroReceiveWindow(scale) // 取用数据前是否有空闲
 	e.rcvBufUsed -= len(v)
+	if wasZero && !e.zeroReceiveWindow(scale) { // 之前没空闲 现在有了 告知一下对端
+		e.notifyProtocolGoroutine(notifyNonZeroReceiveWindow)
+	}
 
 	return v, nil
 }
@@ -765,6 +809,14 @@ func (e *endpoint) Readiness(mask waiter.EventMask) waiter.EventMask {
 	}
 
 	return result
+}
+
+// zeroReceiveWindow 根据可用缓冲区的数量和接收窗口缩放，检查现在要宣布的接收窗口是否为零。
+func (e *endpoint) zeroReceiveWindow(scale uint8) bool {
+	if e.rcvBufUsed >= e.rcvBufSize { // 接收方没接收空间了
+		return true
+	}
+	return ((e.rcvBufSize - e.rcvBufUsed) >> scale) == 0 // 接收方接收空间告急
 }
 
 func (e *endpoint) SetSockOpt(opt interface{}) *tcpip.Error {

@@ -738,7 +738,8 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 			// Patch the window size in the segment according to the
 			// send window scale.
 			s.window <<= e.snd.sndWndScale
-			logger.NOTICE("这里进行了发送窗口的扩张", atoi(s.window))
+			//logger.NOTICE("这里进行了发送窗口的扩张", atoi(s.window))
+
 			// If the timestamp option is negotiated and the segment
 			// does not carry a timestamp option then the segment
 			// must be dropped as per
@@ -768,7 +769,6 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 	// tcp可靠性：累积确认
 	// 如果发送的最大ack不等于下一个接收的序列号，发送ack
 	if e.rcv.rcvNxt != e.snd.maxSentAck {
-		fmt.Printf("\n=======ACK=======%d=======ACK======\n\n", e.rcv.rcvNxt-e.snd.maxSentAck)
 		e.snd.sendAck()
 	}
 
@@ -818,7 +818,7 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 		// 到这里就表示三次握手已经成功了，那么初始化发送器和接收器
 		e.snd = newSender(e, h.iss, h.ackNum-1, h.sndWnd, h.mss, h.sndWndScale)
 		logger.GetInstance().Info(logger.HANDSHAKE, func() {
-			//log.Println("客户端握手成功 客户端的sender", e.snd)
+			log.Println("客户端握手成功 客户端的sender", e.snd)
 		})
 
 		e.rcvListMu.Lock()
@@ -852,6 +852,38 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 			w: &e.newSegmentWaker,
 			f: e.handleSegments,
 		},
+		{
+			// NOTE 这段代码的设计值得借鉴
+			w: &e.notificationWaker,
+			f: func() *tcpip.Error {
+				n := e.fetchNotifications()
+				if n&notifyNonZeroReceiveWindow != 0 {
+					logger.NOTICE("告诉客户端 服务端有空间了")
+				}
+
+				if n&notifyReceiveWindowChanged != 0 {
+				}
+
+				if n&notifyMTUChanged != 0 {
+				}
+
+				if n&notifyReset != 0 {
+
+				}
+
+				//if n&notifyClose != 0 && closeTimer == nil {
+				//
+				//}
+
+				if n&notifyDrain != 0 {
+				}
+
+				if n&notifyKeepaliveChanged != 0 {
+				}
+
+				return nil
+			},
+		},
 	}
 
 	// Initialize the sleeper based on the wakers in funcs.
@@ -879,7 +911,7 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 	// 要使这个主循环结束，也就是tcp连接完全关闭，得同时满足三个条件：
 	// 1，接收器关闭了 2，发送器关闭了 3，下一个未确认的序列号等于添加到发送列表的下一个段的序列号
 	//for !e.rcv.closed || !e.snd.closed || e.snd.sndUna != e.snd.sndNxtList {
-	for !e.rcv.closed /*TODO 其他条件*/ {
+	for !e.rcv.closed || !e.snd.closed || e.snd.sndUna != e.snd.sndNxtList {
 		e.workMu.Unlock()
 		// s.Fetch 会返回事件的index，比如 v=0 的话，
 		// funcs[v].f()就是调用 e.handleWrite

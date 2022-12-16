@@ -284,3 +284,18 @@ K = 4
 2. 同时发送端使用了Zero Window Probe技术，缩写为 ZWP，当接收方的接收窗口为 0 时，每隔一段时间，发送方会主动发送探测包，迫使对端响应来得知其接收窗口有无打开。
 
 
+## Silly Window Syndrome
+
+Silly Window Syndrome 翻译成中文就是“糊涂窗口综合症”。正如你上面看到的一样，如果我们的接收方太忙了，来不及取走 Receive Windows 里的数据，那么，就会导致发送方越来越小。到最后，如果接收方腾出几个字节并告诉发送方现在有几个字节的 window，而我们的发送方会义无反顾地发送这几个字节。
+
+要知道，我们的 TCP+IP 头有 40 个字节，为了几个字节，要达上这么大的开销，这太不经济了。
+
+所以，Silly Windows Syndrome 这个现像就像是你本来可以坐 200 人的飞机里只做了一两个人。要解决这个问题也不难，就是避免对小的 window size 做出响应，直到有足够大的 window size 再响应，这个思路可以同时实现在 sender 和 receiver 两端。
+
+如果这个问题是由 Receiver 端引起的，那么就会使用 David D Clark 方案。在 receiver 端，如果收到的数据导致window size小于某个值，可以直接 ack(0)回 sender，这样就把 window 给关闭了，也阻止了 sender 再发数据过来，等到 receiver 端处理了一些数据后windows size大于等于了 MSS，或者，receiver buffer有一半为空，就可以把 window 打开让 sender 发送数据过来。
+
+
+如果这个问题是由 Sender 端引起的，那么就会使用著名的 Nagle algorithm。这个算法的思路也是延时处理，他有两个主要的条件：
+
+1. 要等到 Window Size >= MSS 或是 Data Size >= MSS
+2. 收到之前发送数据的 ack 回包，他才会发数据，否则就是在攒数据

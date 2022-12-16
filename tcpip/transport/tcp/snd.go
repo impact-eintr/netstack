@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"netstack/logger"
 	"netstack/sleep"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
@@ -11,7 +12,6 @@ import (
 	"netstack/tcpip/seqnum"
 	"sync"
 	"time"
-	"unsafe"
 )
 
 const (
@@ -155,6 +155,17 @@ type sender struct {
 	sndWndScale uint8
 
 	// maxSentAck is the maxium acknowledgement actually sent.
+	// 接收缓存中已经确认过的最小值 如果接收队列的所有数据均已确认 就更新发送队列的这个值
+	/*
+			                                         +------>    983041 <-----+
+		                                             |                        |
+		-----------------+-------------+-------------+------------------------+
+		| ANR      65535 | not revived |  rcvd unack |   able rcv             |
+		-----------------+-------------+-------------+------------------------+
+		^                                            ^                        ^
+		|                                            |                        |
+		4146768523                               maxSendAck              4147817099
+	*/
 	maxSentAck seqnum.Value
 
 	// cc is the congestion control algorithm in use for this sender.
@@ -252,6 +263,9 @@ func (s *sender) updateMaxPayloadSize(mtu, count int) {
 }
 
 func (s *sender) sendAck() {
+	if s.ep.id.LocalPort == 9999 {
+		logger.NOTICE("之前的数据已经确认过了 服务端更新自己的确认边界", atoi(s.ep.rcv.rcvNxt))
+	}
 	s.sendSegment(buffer.VectorisedView{}, flagAck, s.sndNxt) // seq = cookies+1 ack ack|fin.seq+1
 }
 
@@ -333,9 +347,14 @@ func (s *sender) sendSegment(data buffer.VectorisedView, flags byte, seq seqnum.
 	rcvNxt, rcvWnd := s.ep.rcv.getSendParams()
 
 	// Remember the max sent ack.
+	old := s.maxSentAck
 	s.maxSentAck = rcvNxt
 
-	log.Println(s.ep.id.LocalPort, "要求扩展窗口", rcvWnd)
+	if s.ep.id.LocalPort == 9999 {
+		fmt.Println()
+		log.Println("服务端要求客户端扩展窗口到", rcvWnd, "更新发送端的边缘", old, " TO ", s.maxSentAck)
+		fmt.Println()
+	}
 	return s.ep.sendRaw(data, flags, seq, rcvNxt, rcvWnd)
 }
 
@@ -401,9 +420,6 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 	}
 
 	// TODO tcp拥塞控制
-	if s.writeList.Front() != nil {
-		//log.Fatal(s.sndNxt, " 确认成功 继续发送 ", seg.sequenceNumber)
-	}
 	if s.ep.id.LocalPort != 9999 {
 		log.Println(s)
 	}
@@ -442,7 +458,7 @@ func (s *sender) sendData() {
 				panic("Netstack queues FIN segments without data.")
 			}
 			if !seg.sequenceNumber.LessThan(end) {
-				log.Println("暂停数据发送 等待确认标号", seg.sequenceNumber, " 已收到 。。。。")
+				log.Println("暂停数据发送 等待确认标号", seg.sequenceNumber, " 已收到 。。。。", "目前接收发送窗口长度", s.sndWnd)
 				break
 			}
 
@@ -485,11 +501,6 @@ func (s *sender) sendData() {
 	}
 	// Remember the next segment we'll write.
 	s.writeNext = seg
-	if seg != nil {
-		log.Println(unsafe.Pointer(seg), seg.data.Size())
-	}
-
-	time.Sleep(10 * time.Millisecond)
 
 	// 如果重传定时器没有启动 且 sndUna != sndNxt 启动定时器
 	if !s.resendTimer.enabled() && s.sndUna != s.sndNxt {
@@ -497,6 +508,7 @@ func (s *sender) sendData() {
 	}
 
 	// TODO KEEPALIVE
+	time.Sleep(20 * time.Millisecond)
 
 }
 
