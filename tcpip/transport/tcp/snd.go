@@ -404,7 +404,9 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 	if s.writeList.Front() != nil {
 		//log.Fatal(s.sndNxt, " 确认成功 继续发送 ", seg.sequenceNumber)
 	}
-	log.Println(s)
+	if s.ep.id.LocalPort != 9999 {
+		log.Println(s)
+	}
 
 	s.sendData()
 }

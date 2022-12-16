@@ -91,7 +91,12 @@ func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum
 	r.rcvNxt = segSeq.Add(segLen)
 	logger.GetInstance().Info(logger.TCP, func() {
 	})
-	log.Println(r)
+
+	logger.GetInstance().Info(logger.TCP, func() {
+	})
+	if r.ep.id.LocalPort == 9999 {
+		log.Println(r)
+	}
 
 	// 修剪SACK块以删除任何涵盖已消耗序列号的SACK信息。
 	TrimSACKBlockList(&r.ep.sack, r.rcvNxt)

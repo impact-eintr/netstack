@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"net"
 	"netstack/logger"
@@ -137,25 +136,25 @@ func main() {
 		listener := tcpListen(s, proto, addr, localPort)
 		done <- struct{}{}
 		for {
-			conn, err := listener.Accept()
+			_, err := listener.Accept()
 			if err != nil {
 				log.Println(err)
 			}
 			log.Println("服务端 建立连接")
 
-			go func() {
-				for {
-					buf := make([]byte, 1024)
-					n, err := conn.Read(buf)
-					if err != nil {
-						log.Println(err)
-						break
-					}
-					fmt.Println("data: ", n, len(buf), string(buf))
-					//	conn.Write([]byte("Server echo"))
-					//}
-				}
-			}()
+			//go func() {
+			//	for {
+			//		buf := make([]byte, 1024)
+			//		n, err := conn.Read(buf)
+			//		if err != nil {
+			//			log.Println(err)
+			//			break
+			//		}
+			//		fmt.Println("data: ", n, len(buf), string(buf))
+			//		//	conn.Write([]byte("Server echo"))
+			//		//}
+			//	}
+			//}()
 		}
 	}()
 
@@ -171,7 +170,7 @@ func main() {
 
 		time.Sleep(time.Second)
 		log.Printf("\n\n客户端 写入数据")
-		buf := make([]byte, 1<<17)
+		buf := make([]byte, 1<<20)
 		conn.Write(buf)
 		time.Sleep(1 * time.Minute)
 		conn.Close()

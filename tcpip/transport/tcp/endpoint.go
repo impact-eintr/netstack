@@ -16,7 +16,6 @@ import (
 	"netstack/waiter"
 	"sync"
 	"time"
-	"unsafe"
 )
 
 // tcp状态机的状态
@@ -564,7 +563,6 @@ func (e *endpoint) Shutdown(flags tcpip.ShutdownFlags) *tcpip.Error {
 }
 
 func (e *endpoint) Listen(backlog int) (err *tcpip.Error) {
-	log.Println("监听一个tcp端口", unsafe.Pointer(e))
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	defer func() {
@@ -858,6 +856,13 @@ func (e *endpoint) receiveBufferAvailable() int {
 		return 0
 	}
 	return size - used
+}
+
+func (e *endpoint) receiveBufferSize() int {
+	e.rcvListMu.Lock()
+	size := e.rcvBufSize
+	e.rcvListMu.Unlock()
+	return size
 }
 
 // maybeEnableTimestamp marks the timestamp option enabled for this endpoint if
