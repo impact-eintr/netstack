@@ -2,6 +2,7 @@ package tcp
 
 import (
 	"container/heap"
+	"fmt"
 	"log"
 	"netstack/logger"
 	"netstack/tcpip/seqnum"
@@ -59,7 +60,7 @@ func (r *receiver) getSendParams() (rcvNxt seqnum.Value, rcvWnd seqnum.Size) {
 		r.rcvAcc = acc
 	}
 
-	log.Println("-------------", n, acc, r.rcvNxt.Size(r.rcvAcc)>>r.rcvWndScale)
+	//log.Println("-------------", n, acc, r.rcvNxt.Size(r.rcvAcc)>>r.rcvWndScale)
 	return r.rcvNxt, r.rcvNxt.Size(r.rcvAcc) >> r.rcvWndScale
 }
 
@@ -90,6 +91,7 @@ func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum
 	r.rcvNxt = segSeq.Add(segLen)
 	logger.GetInstance().Info(logger.TCP, func() {
 	})
+	log.Println(r)
 
 	// 修剪SACK块以删除任何涵盖已消耗序列号的SACK信息。
 	TrimSACKBlockList(&r.ep.sack, r.rcvNxt)
@@ -132,6 +134,7 @@ func (r *receiver) handleRcvdSegment(s *segment) {
 
 	// tcp流量控制：判断该数据段的序列号是否在接收窗口内，如果不在，立即返回ack给对端。
 	if !r.acceptable(segSeq, segLen) {
+		log.Fatal("发了太多")
 		r.ep.snd.sendAck()
 		return
 	}
@@ -180,3 +183,21 @@ func (r *receiver) handleRcvdSegment(s *segment) {
 |                                            |
 LastByteRead                          LastByteRecv
 */
+
+var fmtRecver string = `%s
+                                             +------>% 10s <-----+
+                                             |                        |
+-----------------+-------------+-------------+------------------------+
+| ANR %10s | not revived |  rcvd unack |   able rcv             |
+-----------------+-------------+-------------+------------------------+
+^                                            ^                        ^
+|                                            |                        |
+% 10s                              % 10s               % 10s`
+
+func (r receiver) String() string {
+	return fmt.Sprintf(fmtRecver,
+		atoi(r.ep.id.LocalPort),
+		atoi(r.rcvNxt.Size(r.rcvAcc)),
+		atoi(r.ep.rcvBufUsed),
+		atoi(r.rcvNxt-seqnum.Value(r.ep.rcvBufUsed)), atoi(r.rcvNxt), atoi(r.rcvAcc))
+}

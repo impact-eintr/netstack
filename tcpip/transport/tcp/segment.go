@@ -62,7 +62,7 @@ type segment struct {
 	sequenceNumber seqnum.Value // tcp序号 第一个字节在整个报文的位置
 	ackNumber      seqnum.Value // 确认号 希望继续获取的下一个字节序号
 	flags          uint8
-	window         seqnum.Size
+	window         seqnum.Size // NOTE 这里是本地的接收窗口大小 不是发送窗口
 	// parsedOptions stores the parsed values from the options in the segment.
 	parsedOptions header.TCPOptions
 	options       []byte

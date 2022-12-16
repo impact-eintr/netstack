@@ -264,6 +264,17 @@ K = 4
 
 ![img](https://doc.shiyanlou.com/document-uid949121labid10418timestamp1555574248321.png)
 
+发送窗口的上限值 = Min [rwnd, cwnd]，cwnd 拥塞窗口
+
+上图中分成了四个部分，分别是：（其中那个黑模型就是滑动窗口）
+
+1. 已收到 ack 确认的数据
+2. 已经发送，但还没收到 ack 的数据
+3. 在窗口中还没有发出的（接收方还有空间）
+4. 窗口以外的数据（接收方没空间）
+
+滑动： 当发送端收到数据 ack 确认时，窗口向右滑
+
 ## Zero Window
 
 如果一个处理缓慢的 Server（接收端）是怎么把 Client（发送端）的 TCP Sliding Window 给降成 0 的。此时，你一定会问，如果 Window 变成 0 了，TCP 会怎么样？是不是发送端就不发数据了？是的，发送端就不发数据了，你可以想像成“Window Closed”，那你一定还会问，如果发送端不发数据了，接收方一会儿 Window size 可用了，怎么通知发送端呢？

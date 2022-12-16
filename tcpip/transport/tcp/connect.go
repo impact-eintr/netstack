@@ -247,6 +247,7 @@ func (h *handshake) synSentState(s *segment) *tcpip.Error {
 	h.flags |= flagAck
 	h.mss = rcvSynOpts.MSS
 	h.sndWndScale = rcvSynOpts.WS
+	logger.NOTICE(atoi(h.sndWnd), atoi(h.sndWndScale), atoi(h.rcvWnd))
 
 	// If this is a SYN ACK response, we only need to acknowledge the SYN
 	// and the handshake is completed.
@@ -255,6 +256,7 @@ func (h *handshake) synSentState(s *segment) *tcpip.Error {
 		// 客户端握手完成，发送 ack 报文给服务端
 		h.state = handshakeCompleted
 		// 最后依次 ack 报文丢了也没关系，因为后面一但发送任何数据包都是带ack的
+		// 这里要求对端缩减窗口
 		h.ep.sendRaw(buffer.VectorisedView{}, flagAck, h.iss+1, h.ackNum, h.rcvWnd>>h.effectiveRcvWndScale())
 		return nil
 	}
@@ -286,7 +288,6 @@ func (h *handshake) synSentState(s *segment) *tcpip.Error {
 // 正常情况下，会调用该函数来处理第三次 ack 报文
 func (h *handshake) synRcvdState(s *segment) *tcpip.Error {
 	if s.flagIsSet(flagRst) {
-		// TODO 需要根据窗口返回 等理解了窗口后再写
 		// RFC 793, page 37, states that in the SYN-RCVD state, a reset
 		// is acceptable if the sequence number is in the window.
 		if s.sequenceNumber.InWindow(h.ackNum, h.rcvWnd) {
@@ -302,13 +303,41 @@ func (h *handshake) synRcvdState(s *segment) *tcpip.Error {
 	// 如果是syn报文，且序列号对应不上，那么返回 rst
 	if s.flagIsSet(flagSyn) && s.sequenceNumber != h.ackNum-1 {
 		// TODO 返回RST报文
+		// We received two SYN segments with different sequence
+		// numbers, so we reset this and restart the whole
+		// process, except that we don't reset the timer.
+		ack := s.sequenceNumber.Add(s.logicalLen())
+		seq := seqnum.Value(0)
+		if s.flagIsSet(flagAck) {
+			seq = s.ackNumber
+		}
+		h.ep.sendRaw(buffer.VectorisedView{}, flagRst|flagAck, seq, ack, 0)
+
+		if !h.active {
+			return tcpip.ErrInvalidEndpointState
+		}
+
+		if err := h.resetState(); err != nil {
+			return err
+		}
+		synOpts := header.TCPSynOptions{
+			WS:            h.rcvWndScale,
+			TS:            h.ep.sendTSOk,
+			TSVal:         h.ep.timestamp(),
+			TSEcr:         h.ep.recentTS,
+			SACKPermitted: h.ep.sackPermitted,
+		}
+		sendSynTCP(&s.route, h.ep.id, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
 		return nil
 	}
 
 	// 如果时ack报文 表示三次握手已经完成
 	if s.flagIsSet(flagAck) {
 		log.Println("TCP STATE ESTABLISHED")
-		// TODO 修改时间戳
+		if h.ep.sendTSOk && !s.parsedOptions.TS {
+			h.ep.stack.Stats().DroppedPackets.Increment()
+			return nil
+		}
 		h.state = handshakeCompleted
 		return nil
 	}
@@ -320,7 +349,10 @@ func (h *handshake) synRcvdState(s *segment) *tcpip.Error {
 func (h *handshake) handleSegment(s *segment) *tcpip.Error {
 	h.sndWnd = s.window
 	if !s.flagIsSet(flagSyn) && h.sndWndScale > 0 {
-		h.sndWnd <<= uint8(h.sndWndScale) // 收紧窗口
+		h.sndWnd <<= uint8(h.sndWndScale) // 收紧发送窗口
+		logger.NOTICE("扩张发送窗口到", atoi(h.sndWnd))
+	} else {
+		logger.NOTICE("原有发送窗口与服务端的接收窗口大小相同", atoi(h.sndWnd))
 	}
 
 	switch h.state {
@@ -543,6 +575,7 @@ func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.Vectorise
 
 	if rcvWnd > 0xffff { // 65535
 		rcvWnd = 0xffff
+		logger.NOTICE("告诉对端 我的接收窗口为", atoi(rcvWnd))
 	}
 
 	// Initialize the header.
@@ -576,7 +609,9 @@ func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.Vectorise
 		r.Stats().TCP.ResetsSent.Increment()
 	}
 
-	log.Printf("TCP 发送 [%s] 报文片段到 %s, seq: |%d|, ack: %d, rcvWnd: %d",
+	logger.GetInstance().Info(logger.TCP, func() {
+	})
+	log.Printf("TCP 发送 [%s] 报文片段到 %s, seq: %d, ack: %d, 可接收rcvWnd: %d",
 		flagString(flags), fmt.Sprintf("%s:%d", id.RemoteAddress, id.RemotePort),
 		seq, ack, rcvWnd)
 
@@ -703,6 +738,7 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 			// Patch the window size in the segment according to the
 			// send window scale.
 			s.window <<= e.snd.sndWndScale
+			logger.NOTICE("这里进行了发送窗口的扩张", atoi(s.window))
 			// If the timestamp option is negotiated and the segment
 			// does not carry a timestamp option then the segment
 			// must be dropped as per
@@ -781,6 +817,9 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 
 		// 到这里就表示三次握手已经成功了，那么初始化发送器和接收器
 		e.snd = newSender(e, h.iss, h.ackNum-1, h.sndWnd, h.mss, h.sndWndScale)
+		logger.GetInstance().Info(logger.HANDSHAKE, func() {
+			//log.Println("客户端握手成功 客户端的sender", e.snd)
+		})
 
 		e.rcvListMu.Lock()
 		e.rcv = newReceiver(e, h.ackNum-1, h.rcvWnd, h.effectiveRcvWndScale())

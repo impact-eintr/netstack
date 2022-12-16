@@ -171,7 +171,7 @@ func main() {
 
 		time.Sleep(time.Second)
 		log.Printf("\n\n客户端 写入数据")
-		buf := make([]byte, 1<<21)
+		buf := make([]byte, 1<<17)
 		conn.Write(buf)
 		time.Sleep(1 * time.Minute)
 		conn.Close()

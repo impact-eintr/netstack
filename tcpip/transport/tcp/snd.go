@@ -181,7 +181,7 @@ type fastRecovery struct {
 func newSender(ep *endpoint, iss, irs seqnum.Value, sndWnd seqnum.Size, mss uint16, sndWndScale int) *sender {
 	s := &sender{
 		ep:             ep,
-		sndCwnd:        InitialCwnd,
+		sndCwnd:        InitialCwnd, // TODO 暂时写死 tcp拥塞窗口 决定了发送窗口的初始大小
 		sndWnd:         sndWnd,
 		sndUna:         iss + 1,
 		sndNxt:         iss + 1, // 缓存长度为0
@@ -402,9 +402,9 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 
 	// TODO tcp拥塞控制
 	if s.writeList.Front() != nil {
-		log.Println(s)
 		//log.Fatal(s.sndNxt, " 确认成功 继续发送 ", seg.sequenceNumber)
 	}
+	log.Println(s)
 
 	s.sendData()
 }
@@ -462,8 +462,9 @@ func (s *sender) sendData() {
 
 			s.outstanding++
 			segEnd = seg.sequenceNumber.Add(seqnum.Size(seg.data.Size()))
-			log.Println("发送窗口一开始是", s.sndWnd,
+			log.Println("发送窗口是", s.sndWnd,
 				"最多发送数据", available,
+				"缓存数据头", seg.sequenceNumber,
 				"缓存数据尾", segEnd,
 				"发送端缓存包数量", s.outstanding)
 		}
@@ -497,9 +498,9 @@ func (s *sender) sendData() {
 
 }
 
-var fmtSender string = `
-                 +----->  % 10s  <------+
-                 |                           |
+var fmtSender string = `%s
+    	         +----->  % 10s  <------+
+                 |    Scale  % 4s            |
 -----------------+-------------+-------------+------------------
 |      已确认    |UAC% 10s|NXT% 10s|   不可发送
 -----------------+-------------+-------------+------------------
@@ -508,11 +509,13 @@ var fmtSender string = `
              % 10s    % 10s`
 
 func (s sender) String() string {
-	return fmt.Sprintf(fmtSender, atoi(uint32(s.sndWnd)),
-		atoi(uint32(s.sndNxt-s.sndUna)), atoi(s.ep.sndBufUsed),
-		atoi(uint32(s.sndUna)), atoi(uint32(s.sndNxt)))
+	return fmt.Sprintf(fmtSender,
+		atoi(s.ep.id.LocalPort),
+		atoi(s.sndWnd), atoi(s.sndWndScale),
+		atoi(s.sndNxt-s.sndUna), atoi(s.ep.sndBufSize-s.ep.sndBufUsed),
+		atoi(s.sndUna), atoi(s.sndNxt))
 }
 
-func atoi[T int | int8 | int16 | int32 | int64 | uint | uint8 | uint16 | uint32](i T) string {
+func atoi[T int | int8 | int16 | int32 | int64 | uint | uint8 | uint16 | uint32 | seqnum.Size | seqnum.Value](i T) string {
 	return fmt.Sprintf("%d", i)
 }

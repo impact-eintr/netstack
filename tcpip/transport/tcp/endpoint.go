@@ -194,9 +194,6 @@ func newEndpoint(stack *stack.Stack, netProto tcpip.NetworkProtocolNumber, waite
 		e.cc = cs
 	}
 
-	log.Println(e.sndBufSize, e.rcvBufSize, e.cc)
-
-	// TODO 需要添加
 	e.segmentQueue.setLimit(2 * e.rcvBufSize)
 	e.workMu.Init()
 	e.workMu.Lock()
@@ -800,9 +797,11 @@ func (e *endpoint) HandlePacket(r *stack.Route, id stack.TransportEndpointID, vv
 		if _, err := e.GetRemoteAddress(); err != nil {
 			prefix = "监听者"
 		}
-		log.Printf(prefix+"收到 tcp [%s] 报文片段 from %s, seq: %d, ack: |%d|",
-			flagString(s.flags), fmt.Sprintf("%s:%d", s.id.RemoteAddress, s.id.RemotePort),
-			s.sequenceNumber, s.ackNumber)
+		logger.GetInstance().Info(logger.TCP, func() {
+			log.Printf(prefix+"收到 tcp [%s] 报文片段 from %s, seq: %d, ack: |%d|",
+				flagString(s.flags), fmt.Sprintf("%s:%d", s.id.RemoteAddress, s.id.RemotePort),
+				s.sequenceNumber, s.ackNumber)
+		})
 
 		// 对于 端口监听者 listener 而言这里唤醒的是 protocolListenLoop
 		// 对于普通tcp连接 conn 而言这里唤醒的是 protocolMainLoop
@@ -827,7 +826,7 @@ func (e *endpoint) updateSndBufferUsage(v int) {
 	e.sndBufMu.Unlock()
 	if notify { // 如果缓存中剩余的数据过多是不需要补充的
 		e.waiterQueue.Notify(waiter.EventOut)
-		//log.Println("提醒 用户层的 Write() 继续写入")
+		log.Println("提醒 用户层的 Write() 继续写入")
 	}
 }
 
