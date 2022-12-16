@@ -60,8 +60,19 @@ func (r *receiver) getSendParams() (rcvNxt seqnum.Value, rcvWnd seqnum.Size) {
 		r.rcvAcc = acc
 	}
 
-	//log.Println("-------------", n, acc, r.rcvNxt.Size(r.rcvAcc)>>r.rcvWndScale)
 	return r.rcvNxt, r.rcvNxt.Size(r.rcvAcc) >> r.rcvWndScale
+}
+
+// David D Clark 方案 当接收端有空闲的时候再次发送一个ack来更新对端的发送窗口
+func (r *receiver) nonZeroWindow() {
+	if (r.rcvAcc-r.rcvNxt)>>r.rcvWndScale != 0 {
+		// We never got around to announcing a zero window size, so we
+		// don't need to immediately announce a nonzero one.
+		return
+	}
+	logger.NOTICE("探测到 0 窗口")
+	//time.Sleep(100 * time.Second)
+	//r.ep.snd.sendAck()
 }
 
 func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum.Size) bool {
@@ -73,7 +84,6 @@ func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum
 		}
 		// 尝试去除已经确认过的数据
 		if segSeq.LessThan(r.rcvNxt) {
-			log.Println("收到重复数据")
 			diff := segSeq.Size(r.rcvNxt)
 			segLen -= diff
 			segSeq.UpdateForward(diff)
@@ -137,7 +147,6 @@ func (r *receiver) handleRcvdSegment(s *segment) {
 
 	// tcp流量控制：判断该数据段的序列号是否在接收窗口内，如果不在，立即返回ack给对端。
 	if !r.acceptable(segSeq, segLen) {
-		log.Fatal("发了太多")
 		r.ep.snd.sendAck()
 		return
 	}

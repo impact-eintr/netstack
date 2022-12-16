@@ -177,7 +177,7 @@ func main() {
 		conn.Write(buf)
 		time.Sleep(5 * time.Second)
 		conn.Write(buf)
-		time.Sleep(5 * time.Minute)
+		time.Sleep(500 * time.Minute)
 		conn.Close()
 	}()
 

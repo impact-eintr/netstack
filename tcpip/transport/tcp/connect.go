@@ -853,12 +853,24 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 			f: e.handleSegments,
 		},
 		{
+			w: &e.snd.resendWaker,
+			f: func() *tcpip.Error {
+				// 如果重传触发了，表示在rto时间内没有收到ack包
+				// 也就是说假设它丢包了
+				if !e.snd.retransmitTimerExpired() {
+					return tcpip.ErrTimeout
+				}
+				return nil
+			},
+		},
+		{
 			// NOTE 这段代码的设计值得借鉴
 			w: &e.notificationWaker,
 			f: func() *tcpip.Error {
+				// 通过比对操作码 执行不同的过程
 				n := e.fetchNotifications()
 				if n&notifyNonZeroReceiveWindow != 0 {
-					logger.NOTICE("告诉客户端 服务端有空间了")
+					e.rcv.nonZeroWindow()
 				}
 
 				if n&notifyReceiveWindowChanged != 0 {

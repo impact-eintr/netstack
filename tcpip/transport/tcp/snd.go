@@ -374,7 +374,9 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 	ack := seg.ackNumber
 	// 如果ack在最小未确认的seq和segNext之间
 	if (ack - 1).InRange(s.sndUna, s.sndNxt) {
-		//log.Printf("[...XXXXXX]-[%d|\t%d\t|%d]==>", s.sndNxt, ack-1, s.sndUna)
+		// 收到了东西 就暂停计时
+		s.resendTimer.disable()
+
 		if s.ep.sendTSOk && seg.parsedOptions.TSEcr != 0 {
 			// TSVal/Ecr values sent by Netstack are at a millisecond
 			// granularity.
@@ -389,7 +391,6 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 		ackLeft := acked
 		//originalOutstanding := s.outstanding
 		// 从发送链表中删除已经确认的数据，发送窗口的滑动。
-		//log.Printf("[...XXXXXX]-[%d|\t\t|%d]==>", s.sndNxt, s.sndUna)
 		for ackLeft > 0 { // 有成功确认的数据 丢弃它们 有剩余数据的话继续发送(根据拥塞策略控制)
 			seg := s.writeList.Front()
 			datalen := seg.logicalLen()
@@ -427,6 +428,34 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 	s.sendData()
 }
 
+// tcp的可靠性：重传定时器触发的时候调用这个函数，也就是超时重传
+// tcp的拥塞控制：发生重传即认为发送丢包，拥塞控制需要对丢包进行相应的处理。
+func (s *sender) retransmitTimerExpired() bool {
+	// 检查计时器是否真的到期
+	if !s.resendTimer.checkExpiration() {
+		return true
+	}
+
+	// 如果rto已经超过了1分钟，直接放弃发送，返回错误
+	if s.rto >= 60*time.Second {
+		return false
+	}
+	// 每次超时，rto都变成原来的2倍
+	s.rto *= 2
+
+	// TODO 拥塞控制
+	// FIXME 添加拥塞控制逻辑
+
+	// tcp可靠性：将下一个段标记为第一个未确认的段，然后再次开始发送。将未完成的数据包数设置为0，以便我们能够重新传输。
+	// 当我们收到我们传输的数据时，我们将继续传输（或重新传输）。
+	s.outstanding = 0
+	s.writeNext = s.writeList.Front()
+	// 重新发送数据包
+	logger.NOTICE("超时重发")
+	s.sendData()
+	return true
+}
+
 // 发送数据段，最终调用 sendSegment 来发送
 func (s *sender) sendData() {
 	limit := s.maxPayloadSize //最开始是65483
@@ -458,7 +487,7 @@ func (s *sender) sendData() {
 				panic("Netstack queues FIN segments without data.")
 			}
 			if !seg.sequenceNumber.LessThan(end) {
-				log.Println("暂停数据发送 等待确认标号", seg.sequenceNumber, " 已收到 。。。。", "目前接收发送窗口长度", s.sndWnd)
+				log.Println("暂停数据发送 等待确认标号", seg.sequenceNumber, " 已收到 。。。。")
 				break
 			}
 
@@ -487,7 +516,7 @@ func (s *sender) sendData() {
 				"发送端缓存包数量", s.outstanding)
 		}
 
-		if !dataSent { // 上面有个break能跳过这一步
+		if !dataSent { // 没有成功发送任何数据
 			dataSent = true
 			// TODO
 		}
@@ -502,14 +531,21 @@ func (s *sender) sendData() {
 	// Remember the next segment we'll write.
 	s.writeNext = seg
 
+	// NOTE 如果对端的接收窗口为0 我们需要定时去问一下他消费完了没
 	// 如果重传定时器没有启动 且 sndUna != sndNxt 启动定时器
 	if !s.resendTimer.enabled() && s.sndUna != s.sndNxt {
+		// NOTE 开启计时器 如果在RTO后没有回信(snd.handleRecvdSegment 中有数据可以处理) 那么将会重发
+		// 在 s.resendTimer.init() 中 将会调用 Assert() 唤醒重发函数 retransmitTimerExpired()
 		s.resendTimer.enable(s.rto)
+		logger.NOTICE("没数据 所以开启一个定时器")
 	}
 
 	// TODO KEEPALIVE
-	time.Sleep(20 * time.Millisecond)
+	if s.sndUna == s.sndNxt {
+		//log.Fatal("注意测试", s.sndWnd)
+	}
 
+	time.Sleep(20 * time.Millisecond)
 }
 
 var fmtSender string = `%s
