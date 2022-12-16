@@ -537,12 +537,11 @@ func (s *sender) sendData() {
 		// NOTE 开启计时器 如果在RTO后没有回信(snd.handleRecvdSegment 中有数据可以处理) 那么将会重发
 		// 在 s.resendTimer.init() 中 将会调用 Assert() 唤醒重发函数 retransmitTimerExpired()
 		s.resendTimer.enable(s.rto)
-		logger.NOTICE("没数据 所以开启一个定时器")
 	}
 
 	// TODO KEEPALIVE
 	if s.sndUna == s.sndNxt {
-		//log.Fatal("注意测试", s.sndWnd)
+		s.ep.resetKeepaliveTimer(false)
 	}
 
 	time.Sleep(20 * time.Millisecond)

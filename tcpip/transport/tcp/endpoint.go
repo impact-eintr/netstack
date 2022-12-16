@@ -57,6 +57,21 @@ type SACKInfo struct {
 	NumBlocks int
 }
 
+// keepalive is a synchronization wrapper used to appease stateify. See the
+// comment in endpoint, where it is used.
+//
+// +stateify savable
+type keepalive struct {
+	sync.Mutex
+	enabled  bool
+	idle     time.Duration
+	interval time.Duration
+	count    int
+	unacked  int
+	timer    timer
+	waker    sleep.Waker
+}
+
 // endpoint 表示TCP端点。该结构用作端点用户和协议实现之间的接口;让并发goroutine调用端点是合法的，
 // 它们是正确同步的。然而，协议实现在单个goroutine中运行。
 type endpoint struct {
@@ -170,6 +185,8 @@ type endpoint struct {
 	// read by Accept() calls.
 	acceptedChan chan *endpoint
 
+	keepalive keepalive
+
 	// The following are only used from the protocol goroutine, and
 	// therefore don't need locks to protect them.
 	rcv *receiver
@@ -192,6 +209,12 @@ func newEndpoint(stack *stack.Stack, netProto tcpip.NetworkProtocolNumber, waite
 		rcvBufSize:  DefaultBufferSize,
 		sndBufSize:  DefaultBufferSize,
 		sndMTU:      int(math.MaxInt32),
+		keepalive: keepalive{
+			// Linux defaults.
+			idle:     2 * time.Hour,
+			interval: 75 * time.Second,
+			count:    9,
+		},
 	}
 
 	var ss SendBufferSizeOption

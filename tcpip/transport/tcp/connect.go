@@ -772,7 +772,46 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 		e.snd.sendAck()
 	}
 
+	// TODO keepalive 解决 ZWP 问题
+	e.resetKeepaliveTimer(true)
+
 	return nil
+}
+
+func (e *endpoint) keepaliveTimerExpired() *tcpip.Error {
+	return nil
+}
+
+// NOTE 这里是 Nagle algorithm 的实现 也就是用来解决 发送端的 ZWP 问题
+func (e *endpoint) resetKeepaliveTimer(receivedData bool) *tcpip.Error {
+	e.keepalive.Lock()
+	defer e.keepalive.Unlock()
+	if receivedData {
+		e.keepalive.unacked = 0
+		logger.NOTICE("测试 keepalive 有数据进入")
+	} else {
+		logger.NOTICE("测试 keepalive 无数据进入")
+	}
+
+	if e.keepalive.unacked >= e.keepalive.count {
+		e.keepalive.Unlock()
+		return tcpip.ErrConnectionReset
+	}
+
+	// RFC1122 4.2.3.6: TCP keepalive is a dataless ACK with
+	// seg.seq = snd.nxt-1.
+	e.keepalive.unacked++
+	e.keepalive.Unlock()
+	e.snd.sendSegment(buffer.VectorisedView{}, flagAck, e.snd.sndNxt-1)
+	e.resetKeepaliveTimer(false)
+	return nil
+}
+
+// disableKeepaliveTimer stops the keepalive timer.
+func (e *endpoint) disableKeepaliveTimer() {
+	e.keepalive.Lock()
+	e.keepalive.timer.disable()
+	e.keepalive.Unlock()
 }
 
 // protocolMainLoop 是TCP协议的主循环。它在自己的goroutine中运行，负责握手、发送段和处理收到的段
@@ -826,6 +865,9 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 		e.rcvListMu.Unlock()
 	}
 
+	e.keepalive.timer.init(&e.keepalive.waker)
+	defer e.keepalive.timer.cleanup()
+
 	e.mu.Lock()
 	e.state = stateConnected
 	// TODO drained
@@ -862,6 +904,10 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 				}
 				return nil
 			},
+		},
+		{
+			w: &e.keepalive.waker,
+			f: e.keepaliveTimerExpired,
 		},
 		{
 			// NOTE 这段代码的设计值得借鉴

@@ -71,6 +71,7 @@ func (r *receiver) nonZeroWindow() {
 		return
 	}
 	logger.NOTICE("探测到 0 窗口")
+	// FIXME 揭开注释
 	//time.Sleep(100 * time.Second)
 	//r.ep.snd.sendAck()
 }
