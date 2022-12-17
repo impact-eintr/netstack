@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"net"
 	"netstack/logger"
@@ -153,9 +152,8 @@ func main() {
 						log.Println(err)
 						break
 					}
-					fmt.Println("data: ", n, len(buf), string(buf))
-					//	conn.Write([]byte("Server echo"))
-					//}
+					logger.NOTICE(string(buf[:n]))
+					conn.Write([]byte("Hello Client"))
 				}
 			}()
 		}
@@ -176,16 +174,20 @@ func main() {
 		conn.SetSockOpt(tcpip.KeepaliveIdleOption(30 * time.Second)) // 30s的探活心跳
 		conn.SetSockOpt(tcpip.KeepaliveCountOption(9))
 
-		time.Sleep(time.Second)
-
 		log.Printf("\n\n客户端 写入数据")
-		buf := make([]byte, 1<<20)
-		conn.Write(buf)
 
-		time.Sleep(5 * time.Second)
+		for i := 0; i < 30; i++ {
+			conn.Write([]byte("Hello Server!"))
 
-		buf = make([]byte, 1<<22)
-		conn.Write(buf)
+			buf := make([]byte, 1024)
+			n, err := conn.Read(buf)
+			if err != nil {
+				log.Println(err)
+				break
+			}
+			logger.NOTICE(string(buf[:n]))
+			time.Sleep(1 * time.Second)
+		}
 
 		time.Sleep(500 * time.Minute)
 		conn.Close()
