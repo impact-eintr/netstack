@@ -70,10 +70,7 @@ func (r *receiver) nonZeroWindow() {
 		// don't need to immediately announce a nonzero one.
 		return
 	}
-	logger.NOTICE("探测到 0 窗口")
-	// FIXME 揭开注释
-	//time.Sleep(100 * time.Second)
-	//r.ep.snd.sendAck()
+	r.ep.snd.sendAck()
 }
 
 func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum.Size) bool {

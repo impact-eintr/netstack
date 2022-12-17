@@ -59,12 +59,15 @@ type SACKInfo struct {
 
 // keepalive is a synchronization wrapper used to appease stateify. See the
 // comment in endpoint, where it is used.
-//
+// KeepAlive默认情况下是关闭的，可以被上层应用开启和关闭
+// tcp_keepalive_probes: 在tcp_keepalive_time之后，没有接收到对方确认，继续发送保活探测包次数，默认值为9（次）
 // +stateify savable
 type keepalive struct {
 	sync.Mutex
-	enabled  bool
-	idle     time.Duration
+	enabled bool
+	// KeepAlive的空闲时长，或者说每次正常发送心跳的周期，默认值为7200s（2小时）
+	idle time.Duration
+	// KeepAlive探测包的发送间隔，默认值为75s
 	interval time.Duration
 	count    int
 	unacked  int
@@ -842,12 +845,241 @@ func (e *endpoint) zeroReceiveWindow(scale uint8) bool {
 	return ((e.rcvBufSize - e.rcvBufUsed) >> scale) == 0 // 接收方接收空间告急
 }
 
+// SetSockOpt sets a socket option
 func (e *endpoint) SetSockOpt(opt interface{}) *tcpip.Error {
+	switch v := opt.(type) {
+	case tcpip.KeepaliveEnabledOption:
+		e.keepalive.Lock()
+		e.keepalive.enabled = v != 0
+		e.keepalive.Unlock()
+		e.notifyProtocolGoroutine(notifyKeepaliveChanged)
+
+	case tcpip.KeepaliveIdleOption:
+		e.keepalive.Lock()
+		e.keepalive.idle = time.Duration(v)
+		e.keepalive.Unlock()
+		e.notifyProtocolGoroutine(notifyKeepaliveChanged)
+
+	case tcpip.KeepaliveIntervalOption:
+		e.keepalive.Lock()
+		e.keepalive.interval = time.Duration(v)
+		e.keepalive.Unlock()
+		e.notifyProtocolGoroutine(notifyKeepaliveChanged)
+
+	case tcpip.KeepaliveCountOption:
+		e.keepalive.Lock()
+		e.keepalive.count = int(v)
+		e.keepalive.Unlock()
+		e.notifyProtocolGoroutine(notifyKeepaliveChanged)
+
+		//case tcpip.NoDelayOption:
+		//	e.mu.Lock()
+		//	e.noDelay = v != 0
+		//	e.mu.Unlock()
+		//	return nil
+
+		//case tcpip.ReuseAddressOption:
+		//	e.mu.Lock()
+		//	e.reuseAddr = v != 0
+		//	e.mu.Unlock()
+		//	return nil
+
+		//case tcpip.ReceiveBufferSizeOption:
+		//	// Make sure the receive buffer size is within the min and max
+		//	// allowed.
+		//	var rs ReceiveBufferSizeOption
+		//	size := int(v)
+		//	if err := e.stack.TransportProtocolOption(ProtocolNumber, &rs); err == nil {
+		//		if size < rs.Min {
+		//			size = rs.Min
+		//		}
+		//		if size > rs.Max {
+		//			size = rs.Max
+		//		}
+		//	}
+
+		//	mask := uint32(notifyReceiveWindowChanged)
+
+		//	e.rcvListMu.Lock()
+
+		//	// Make sure the receive buffer size allows us to send a
+		//	// non-zero window size.
+		//	scale := uint8(0)
+		//	if e.rcv != nil {
+		//		scale = e.rcv.rcvWndScale
+		//	}
+		//	if size>>scale == 0 {
+		//		size = 1 << scale
+		//	}
+
+		//	// Make sure 2*size doesn't overflow.
+		//	if size > math.MaxInt32/2 {
+		//		size = math.MaxInt32 / 2
+		//	}
+
+		//	wasZero := e.zeroReceiveWindow(scale)
+		//	e.rcvBufSize = size
+		//	if wasZero && !e.zeroReceiveWindow(scale) {
+		//		mask |= notifyNonZeroReceiveWindow
+		//	}
+		//	e.rcvListMu.Unlock()
+
+		//	e.segmentQueue.setLimit(2 * size)
+
+		//	e.notifyProtocolGoroutine(mask)
+		//	return nil
+
+		//case tcpip.SendBufferSizeOption:
+		//	// Make sure the send buffer size is within the min and max
+		//	// allowed.
+		//	size := int(v)
+		//	var ss SendBufferSizeOption
+		//	if err := e.stack.TransportProtocolOption(ProtocolNumber, &ss); err == nil {
+		//		if size < ss.Min {
+		//			size = ss.Min
+		//		}
+		//		if size > ss.Max {
+		//			size = ss.Max
+		//		}
+		//	}
+
+		//	e.sndBufMu.Lock()
+		//	e.sndBufSize = size
+		//	e.sndBufMu.Unlock()
+
+		//	return nil
+
+		//case tcpip.V6OnlyOption:
+		//	// We only recognize this option on v6 endpoints.
+		//	if e.netProto != header.IPv6ProtocolNumber {
+		//		return tcpip.ErrInvalidEndpointState
+		//	}
+
+		//	e.mu.Lock()
+		//	defer e.mu.Unlock()
+
+		//	// We only allow this to be set when we're in the initial state.
+		//	if e.state != stateInitial {
+		//		return tcpip.ErrInvalidEndpointState
+		//	}
+
+		//	e.v6only = v != 0
+
+	}
+
 	return nil
 }
 
 func (e *endpoint) GetSockOpt(opt interface{}) *tcpip.Error {
-	return nil
+	switch o := opt.(type) {
+	case tcpip.ErrorOption:
+		e.lastErrorMu.Lock()
+		err := e.lastError
+		e.lastError = nil
+		e.lastErrorMu.Unlock()
+		return err
+
+	case *tcpip.SendBufferSizeOption:
+		e.sndBufMu.Lock()
+		*o = tcpip.SendBufferSizeOption(e.sndBufSize)
+		e.sndBufMu.Unlock()
+		return nil
+
+	case *tcpip.ReceiveBufferSizeOption:
+		e.rcvListMu.Lock()
+		*o = tcpip.ReceiveBufferSizeOption(e.rcvBufSize)
+		e.rcvListMu.Unlock()
+		return nil
+
+	//case *tcpip.ReceiveQueueSizeOption:
+	//	v, err := e.readyReceiveSize()
+	//	if err != nil {
+	//		return err
+	//	}
+
+	//	*o = tcpip.ReceiveQueueSizeOption(v)
+	//	return nil
+
+	//case *tcpip.NoDelayOption:
+	//	e.mu.RLock()
+	//	v := e.noDelay
+	//	e.mu.RUnlock()
+
+	//	*o = 0
+	//	if v {
+	//		*o = 1
+	//	}
+	//	return nil
+
+	//case *tcpip.ReuseAddressOption:
+	//	e.mu.RLock()
+	//	v := e.reuseAddr
+	//	e.mu.RUnlock()
+
+	//	*o = 0
+	//	if v {
+	//		*o = 1
+	//	}
+	//	return nil
+
+	case *tcpip.V6OnlyOption:
+		// We only recognize this option on v6 endpoints.
+		if e.netProto != header.IPv6ProtocolNumber {
+			return tcpip.ErrUnknownProtocolOption
+		}
+
+		e.mu.Lock()
+		v := e.v6only
+		e.mu.Unlock()
+
+		*o = 0
+		if v {
+			*o = 1
+		}
+		return nil
+
+	case *tcpip.TCPInfoOption:
+		*o = tcpip.TCPInfoOption{}
+		e.mu.RLock()
+		snd := e.snd
+		e.mu.RUnlock()
+		if snd != nil {
+			snd.rtt.Lock()
+			o.RTT = snd.rtt.srtt
+			o.RTTVar = snd.rtt.rttvar
+			snd.rtt.Unlock()
+		}
+
+		return nil
+
+	case *tcpip.KeepaliveEnabledOption:
+		e.keepalive.Lock()
+		v := e.keepalive.enabled
+		e.keepalive.Unlock()
+
+		*o = 0
+		if v {
+			*o = 1
+		}
+
+	case *tcpip.KeepaliveIdleOption:
+		e.keepalive.Lock()
+		*o = tcpip.KeepaliveIdleOption(e.keepalive.idle)
+		e.keepalive.Unlock()
+
+	case *tcpip.KeepaliveIntervalOption:
+		e.keepalive.Lock()
+		*o = tcpip.KeepaliveIntervalOption(e.keepalive.interval)
+		e.keepalive.Unlock()
+
+	case *tcpip.KeepaliveCountOption:
+		e.keepalive.Lock()
+		*o = tcpip.KeepaliveCountOption(e.keepalive.count)
+		e.keepalive.Unlock()
+
+	}
+
+	return tcpip.ErrUnknownProtocolOption
 }
 
 func (e *endpoint) HandlePacket(r *stack.Route, id stack.TransportEndpointID, vv buffer.VectorisedView) {

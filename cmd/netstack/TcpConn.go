@@ -97,6 +97,16 @@ func (conn *TcpConn) Close() {
 	conn.ep.Close()
 }
 
+// SetSockOpt 设置socket属性 暂时只测试keepalive
+func (conn *TcpConn) SetSockOpt(opt interface{}) error {
+	err := conn.ep.SetSockOpt(opt)
+	if err != nil {
+		return fmt.Errorf("%s", err.String())
+	}
+
+	return nil
+}
+
 // Listener tcp连接监听器
 type Listener struct {
 	raddr    tcpip.FullAddress

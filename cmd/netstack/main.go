@@ -142,7 +142,7 @@ func main() {
 				log.Println(err)
 			}
 			log.Println("服务端 建立连接")
-			_ = conn
+
 			go func() {
 				time.Sleep(3 * time.Second)
 				for {
@@ -171,12 +171,22 @@ func main() {
 		}
 		log.Printf("客户端 建立连接\n")
 
+		conn.SetSockOpt(tcpip.KeepaliveEnabledOption(1))
+		conn.SetSockOpt(tcpip.KeepaliveIntervalOption(75 * time.Second))
+		conn.SetSockOpt(tcpip.KeepaliveIdleOption(30 * time.Second)) // 30s的探活心跳
+		conn.SetSockOpt(tcpip.KeepaliveCountOption(9))
+
 		time.Sleep(time.Second)
+
 		log.Printf("\n\n客户端 写入数据")
 		buf := make([]byte, 1<<20)
 		conn.Write(buf)
+
 		time.Sleep(5 * time.Second)
+
+		buf = make([]byte, 1<<22)
 		conn.Write(buf)
+
 		time.Sleep(500 * time.Minute)
 		conn.Close()
 	}()

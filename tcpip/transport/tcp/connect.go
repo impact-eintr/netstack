@@ -247,7 +247,6 @@ func (h *handshake) synSentState(s *segment) *tcpip.Error {
 	h.flags |= flagAck
 	h.mss = rcvSynOpts.MSS
 	h.sndWndScale = rcvSynOpts.WS
-	logger.NOTICE(atoi(h.sndWnd), atoi(h.sndWndScale), atoi(h.rcvWnd))
 
 	// If this is a SYN ACK response, we only need to acknowledge the SYN
 	// and the handshake is completed.
@@ -351,8 +350,6 @@ func (h *handshake) handleSegment(s *segment) *tcpip.Error {
 	if !s.flagIsSet(flagSyn) && h.sndWndScale > 0 {
 		h.sndWnd <<= uint8(h.sndWndScale) // 收紧发送窗口
 		logger.NOTICE("扩张发送窗口到", atoi(h.sndWnd))
-	} else {
-		logger.NOTICE("原有发送窗口与服务端的接收窗口大小相同", atoi(h.sndWnd))
 	}
 
 	switch h.state {
@@ -778,19 +775,12 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 	return nil
 }
 
-func (e *endpoint) keepaliveTimerExpired() *tcpip.Error {
-	return nil
-}
-
 // NOTE 这里是 Nagle algorithm 的实现 也就是用来解决 发送端的 ZWP 问题
-func (e *endpoint) resetKeepaliveTimer(receivedData bool) *tcpip.Error {
+func (e *endpoint) keepaliveTimerExpired() *tcpip.Error {
 	e.keepalive.Lock()
-	defer e.keepalive.Unlock()
-	if receivedData {
-		e.keepalive.unacked = 0
-		logger.NOTICE("测试 keepalive 有数据进入")
-	} else {
-		logger.NOTICE("测试 keepalive 无数据进入")
+	if !e.keepalive.enabled || !e.keepalive.timer.checkExpiration() {
+		e.keepalive.Unlock()
+		return nil
 	}
 
 	if e.keepalive.unacked >= e.keepalive.count {
@@ -805,6 +795,28 @@ func (e *endpoint) resetKeepaliveTimer(receivedData bool) *tcpip.Error {
 	e.snd.sendSegment(buffer.VectorisedView{}, flagAck, e.snd.sndNxt-1)
 	e.resetKeepaliveTimer(false)
 	return nil
+}
+
+// 充值 keepalive 的时间
+func (e *endpoint) resetKeepaliveTimer(receivedData bool) {
+	e.keepalive.Lock()
+	defer e.keepalive.Unlock()
+	if receivedData {
+		e.keepalive.unacked = 0
+	}
+
+	// Start the keepalive timer IFF it's enabled and there is no pending
+	// data to send.
+	if !e.keepalive.enabled || e.snd == nil || e.snd.sndUna != e.snd.sndNxt {
+		e.keepalive.timer.disable()
+		return
+	}
+
+	if e.keepalive.unacked > 0 {
+		e.keepalive.timer.enable(e.keepalive.interval)
+	} else {
+		e.keepalive.timer.enable(e.keepalive.idle)
+	}
 }
 
 // disableKeepaliveTimer stops the keepalive timer.
@@ -937,6 +949,7 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 				}
 
 				if n&notifyKeepaliveChanged != 0 {
+					e.resetKeepaliveTimer(true)
 				}
 
 				return nil

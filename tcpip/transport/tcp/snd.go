@@ -263,9 +263,6 @@ func (s *sender) updateMaxPayloadSize(mtu, count int) {
 }
 
 func (s *sender) sendAck() {
-	if s.ep.id.LocalPort == 9999 {
-		logger.NOTICE("之前的数据已经确认过了 服务端更新自己的确认边界", atoi(s.ep.rcv.rcvNxt))
-	}
 	s.sendSegment(buffer.VectorisedView{}, flagAck, s.sndNxt) // seq = cookies+1 ack ack|fin.seq+1
 }
 
@@ -347,13 +344,12 @@ func (s *sender) sendSegment(data buffer.VectorisedView, flags byte, seq seqnum.
 	rcvNxt, rcvWnd := s.ep.rcv.getSendParams()
 
 	// Remember the max sent ack.
-	old := s.maxSentAck
 	s.maxSentAck = rcvNxt
 
 	if s.ep.id.LocalPort == 9999 {
-		fmt.Println()
-		log.Println("服务端要求客户端扩展窗口到", rcvWnd, "更新发送端的边缘", old, " TO ", s.maxSentAck)
-		fmt.Println()
+		//fmt.Println()
+		//log.Println("服务端要求客户端扩展窗口到", rcvWnd, "更新发送端的边缘", old, " TO ", s.maxSentAck)
+		//fmt.Println()
 	}
 	return s.ep.sendRaw(data, flags, seq, rcvNxt, rcvWnd)
 }
