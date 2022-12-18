@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/binary"
 	"flag"
+	"fmt"
+	"io"
 	"log"
 	"net"
 	"netstack/logger"
@@ -133,6 +136,10 @@ func main() {
 
 	//logger.SetFlags(logger.TCP)
 	go func() { // echo server
+		//time.Sleep(1 * time.Second)
+		//pid := Register()
+		//log.Fatal(pid)
+
 		listener := tcpListen(s, proto, addr, localPort)
 		done <- struct{}{}
 		for {
@@ -143,7 +150,6 @@ func main() {
 			log.Println("服务端 建立连接")
 
 			go func() {
-				time.Sleep(3 * time.Second)
 				for {
 					time.Sleep(50 * time.Millisecond)
 					buf := make([]byte, 1024)
@@ -153,7 +159,7 @@ func main() {
 						break
 					}
 					logger.NOTICE(string(buf[:n]))
-					conn.Write([]byte("Hello Client"))
+					//conn.Write([]byte("Hello Client"))
 				}
 			}()
 		}
@@ -176,26 +182,80 @@ func main() {
 
 		log.Printf("\n\n客户端 写入数据")
 
-		for i := 0; i < 30; i++ {
+		for i := 0; i < 1; i++ {
 			conn.Write([]byte("Hello Server!"))
 
-			buf := make([]byte, 1024)
-			n, err := conn.Read(buf)
-			if err != nil {
-				log.Println(err)
-				break
-			}
-			logger.NOTICE(string(buf[:n]))
+			//buf := make([]byte, 1024)
+			//n, err := conn.Read(buf)
+			//if err != nil {
+			//	log.Println(err)
+			//	break
+			//}
+			//logger.NOTICE(string(buf[:n]))
 			time.Sleep(1 * time.Second)
 		}
 
-		time.Sleep(500 * time.Minute)
+		select {}
 		conn.Close()
 	}()
 
 	close(done)
 
+	l, err := net.Listen("tcp", "127.0.0.1:9999")
+	if err != nil {
+		fmt.Println("Error listening:", err)
+		os.Exit(1)
+	}
+	rcv := &RCV{
+		Stack:  s,
+		rcvBuf: make([]byte, 1<<20),
+	}
+
+	TCPServer(l, rcv)
+
 	c := make(chan os.Signal)
 	signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGUSR1, syscall.SIGUSR2)
 	<-c
+}
+
+const (
+	REGISTER byte = iota
+	LISTEN
+	CONNECT
+	READ
+	WRITE
+	CLOSE
+)
+
+// Register 从netstack获取pid
+func Register() PID {
+	// 连接本地netstack服务
+	conn, err := net.Dial("tcp", "127.0.0.1:9999")
+	if err != nil {
+		fmt.Println("err : ", err)
+		return 0
+	}
+	defer conn.Close()
+
+	_, err = conn.Write(make([]byte, 1<<20))
+	buf, _ := io.ReadAll(conn)
+
+	log.Fatal(buf)
+	return 3
+}
+
+// Listen 传递 pid addr port 监听+绑定地址
+func Listen(pid PID, addr tcpip.Address, localPort int) FD {
+	// 连接本地netstack服务
+	conn, err := net.Dial("tcp", "127.0.0.1:9999")
+	if err != nil {
+		fmt.Println("err : ", err)
+		return 0
+	}
+	buf := make([]byte, 1024)
+	binary.BigEndian.PutUint16(buf[:4], uint16(pid))
+	conn.Write(buf)
+	buf, _ = io.ReadAll(conn)
+	log.Fatal(buf)
+	return 0
 }

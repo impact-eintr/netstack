@@ -6,22 +6,28 @@ import (
 	"io"
 	"log"
 	"net"
+	"netstack/logger"
 	"netstack/tcpip"
-	"netstack/tcpip/header"
 	"netstack/tcpip/stack"
-	"netstack/tcpip/transport/udp"
-	"netstack/waiter"
 	"runtime"
 	"strings"
+	"sync/atomic"
 )
+
+// PID netstack PID
+type PID uint16
+
+var currPID uint32 = 2 // 0 1 2 用过了
+
+type FD uint16
+
+var fds = make(map[PID][1024]FD, 8)
 
 type TCPHandler interface {
 	Handle(net.Conn)
 }
 
 func TCPServer(listener net.Listener, handler TCPHandler) error {
-	log.Printf("netstack 网络解析地址: %s", listener.Addr())
-
 	for {
 		clientConn, err := listener.Accept()
 		if err != nil {
@@ -54,31 +60,37 @@ type RCV struct {
 }
 
 func (r *RCV) Handle(conn net.Conn) {
+	logger.NOTICE("RCV handle")
 	var err error
 	r.rcvBuf, err = io.ReadAll(conn)
-	if err != nil && len(r.rcvBuf) < 9 { // proto + ip + port
+	if err != nil && len(r.rcvBuf) < 1 { // 操作码
 		panic(err)
 	}
 
-	switch string(r.rcvBuf[:3]) {
-	case "udp":
-		var wq waiter.Queue
-		// 新建一个udp端
-		ep, err := r.NewEndpoint(udp.ProtocolNumber, header.IPv4ProtocolNumber, &wq)
-		if err != nil {
-			log.Fatal(err)
-		}
-		r.ep = ep
-		r.Bind()
-		r.Connect()
-		r.Close()
-	case "tcp":
+	logger.NOTICE("注意测试")
+
+	switch r.rcvBuf[0] {
+	case REGISTER:
+		conn.Write(r.Register())
+	case LISTEN:
+		goto FAULT
+	case CONNECT:
+		goto FAULT
+	case READ:
+		goto FAULT
+	case WRITE:
+		goto FAULT
+	case CLOSE:
+		goto FAULT
 	default:
 		return
 	}
+
+FAULT:
+	logger.NOTICE("FAULT")
 }
 
-func (r *RCV) Bind() {
+func (r *RCV) Listen() {
 	if len(r.rcvBuf) < 9 { // udp ip port
 		log.Println("Error: too few arg")
 		return
@@ -98,4 +110,11 @@ func (r *RCV) Connect() {
 
 func (r *RCV) Close() {
 	r.ep.Close()
+}
+
+func (r *RCV) Register() []byte {
+	pid := uint16(atomic.AddUint32(&currPID, 1))
+	b := make([]byte, 2)
+	binary.BigEndian.PutUint16(b[:2], pid)
+	return b
 }
