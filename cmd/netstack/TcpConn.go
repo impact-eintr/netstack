@@ -107,24 +107,15 @@ func (conn *TcpConn) SetSockOpt(opt interface{}) error {
 	return nil
 }
 
-// Listener tcp连接监听器
-type Listener struct {
-	raddr    tcpip.FullAddress
-	ep       tcpip.Endpoint
-	wq       *waiter.Queue
-	we       *waiter.Entry
-	notifyCh chan struct{}
-}
-
 // Accept 封装tcp的accept操作
-func (l *Listener) Accept() (*TcpConn, error) {
-	l.wq.EventRegister(l.we, waiter.EventIn|waiter.EventOut)
-	defer l.wq.EventUnregister(l.we)
+func (conn *TcpConn) Accept() (*TcpConn, error) {
+	conn.wq.EventRegister(conn.we, waiter.EventIn|waiter.EventOut)
+	defer conn.wq.EventUnregister(conn.we)
 	for {
-		ep, wq, err := l.ep.Accept()
+		ep, wq, err := conn.ep.Accept()
 		if err != nil {
 			if err == tcpip.ErrWouldBlock {
-				<-l.notifyCh
+				<-conn.notifyCh
 				continue
 			}
 			return nil, fmt.Errorf("%s", err.String())
@@ -137,7 +128,7 @@ func (l *Listener) Accept() (*TcpConn, error) {
 	}
 }
 
-func tcpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Address, localPort int) *Listener {
+func tcpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Address, localPort int) *TcpConn {
 	var wq waiter.Queue
 	// 新建一个tcp端
 	ep, err := s.NewEndpoint(tcp.ProtocolNumber, proto, &wq)
@@ -157,9 +148,18 @@ func tcpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Add
 	}
 
 	waitEntry, notifyCh := waiter.NewChannelEntry(nil)
-	return &Listener{
+	return &TcpConn{
 		ep:       ep,
 		wq:       &wq,
 		we:       &waitEntry,
 		notifyCh: notifyCh}
+}
+
+// Listener tcp连接监听器
+type Listener struct {
+	raddr    tcpip.FullAddress
+	ep       tcpip.Endpoint
+	wq       *waiter.Queue
+	we       *waiter.Entry
+	notifyCh chan struct{}
 }
