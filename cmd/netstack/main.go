@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"flag"
 	"fmt"
 	"log"
@@ -135,27 +134,30 @@ func main() {
 
 	//logger.SetFlags(logger.TCP)
 	go func() { // echo server
-		pid := Register()
+		//time.Sleep(1 * time.Second)
+		//pid := Register()
+		//log.Fatal(pid)
 
-		lfd := Listen(pid, addr, localPort)
+		listener := tcpListen(s, proto, addr, localPort)
 		done <- struct{}{}
-
 		for {
-			cfd := Accept(pid, lfd)
+			conn, err := listener.Accept()
 			if err != nil {
 				log.Println(err)
 			}
+			log.Println("服务端 建立连接")
+
 			go func() {
 				for {
 					time.Sleep(50 * time.Millisecond)
 					buf := make([]byte, 1024)
-					n, err := Read(pid, cfd, buf)
+					n, err := conn.Read(buf)
 					if err != nil {
 						log.Println(err)
 						break
 					}
 					logger.NOTICE(string(buf[:n]))
-					Write(pid, cfd, []byte("Hello Client"))
+					//conn.Write([]byte("Hello Client"))
 				}
 			}()
 		}
@@ -211,103 +213,4 @@ func main() {
 	c := make(chan os.Signal)
 	signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGUSR1, syscall.SIGUSR2)
 	<-c
-}
-
-const (
-	REGISTER byte = iota
-	LISTEN
-	ACCEPT
-	CONNECT
-	READ
-	WRITE
-	CLOSE
-)
-
-// Register 从netstack获取pid
-func Register() PID {
-	// 连接本地netstack服务
-	conn, err := net.Dial("tcp", "127.0.0.1:9999")
-	if err != nil {
-		fmt.Println("err : ", err)
-		return 0
-	}
-	defer conn.Close()
-
-	_, err = conn.Write([]byte{0})
-	buf := make([]byte, 2)
-	conn.Read(buf)
-
-	return PID(binary.BigEndian.Uint16(buf))
-}
-
-// Listen 传递 pid addr port 监听+绑定地址
-func Listen(pid PID, addr tcpip.Address, localPort int) FD {
-	conn, err := net.Dial("tcp", "127.0.0.1:9999")
-	if err != nil {
-		fmt.Println("err : ", err)
-		return 0
-	}
-	// 1 pid port
-	buf := make([]byte, 5)
-	buf[0] = LISTEN
-	binary.BigEndian.PutUint16(buf[1:3], uint16(pid))
-	binary.BigEndian.PutUint16(buf[3:5], uint16(localPort))
-	conn.Write(buf)
-
-	buf = make([]byte, 2)
-	conn.Read(buf)
-	return FD(binary.BigEndian.Uint16(buf))
-}
-
-// Accept 传递 pid + listenerfd 返回 connfd
-func Accept(pid PID, lfd FD) FD {
-	conn, err := net.Dial("tcp", "127.0.0.1:9999")
-	if err != nil {
-		fmt.Println("err : ", err)
-		return 0
-	}
-	// 2 pid lfd
-	buf := make([]byte, 5)
-	buf[0] = ACCEPT
-	binary.BigEndian.PutUint16(buf[1:3], uint16(pid))
-	binary.BigEndian.PutUint16(buf[3:5], uint16(lfd))
-	conn.Write(buf)
-
-	buf = make([]byte, 2)
-	conn.Read(buf)
-	return FD(binary.BigEndian.Uint16(buf))
-}
-
-func Read(pid PID, cfd FD, rcv []byte) (int, error) {
-	conn, err := net.Dial("tcp", "127.0.0.1:9999")
-	if err != nil {
-		fmt.Println("err : ", err)
-		return 0, err
-	}
-	// 2 pid cfd
-	buf := make([]byte, 5)
-	buf[0] = READ
-	binary.BigEndian.PutUint16(buf[1:3], uint16(pid))
-	binary.BigEndian.PutUint16(buf[3:5], uint16(cfd))
-	conn.Write(buf)
-
-	return conn.Read(rcv)
-}
-
-func Write(pid PID, cfd FD, snd []byte) (int, error) {
-	conn, err := net.Dial("tcp", "127.0.0.1:9999")
-	if err != nil {
-		fmt.Println("err : ", err)
-		return 0, err
-	}
-	// 2 pid cfd
-	buf := make([]byte, 9)
-	buf[0] = WRITE
-	binary.BigEndian.PutUint16(buf[1:3], uint16(pid))
-	binary.BigEndian.PutUint16(buf[3:5], uint16(cfd))
-	binary.BigEndian.PutUint32(buf[5:9], uint32(len(snd)))
-	buf = append(buf, snd...)
-	conn.Write(buf)
-
-	return conn.Read(nil)
 }
