@@ -56,7 +56,7 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable, payload b
 	// Because we're immediately turning around and writing the packet back to the
 	// rx path, we intentionally don't preserve the remote and local link
 	// addresses from the stack.Route we're passed.
-	logger.NOTICE(fmt.Sprintf("统计分发 %d 报文", e.count))
+	//logger.NOTICE(fmt.Sprintf("统计分发 %d 报文", e.count))
 	e.dispatcher.DeliverNetworkPacket(e, "" /* remoteLinkAddr */, "" /* localLinkAddr */, protocol, vv)
 
 	return nil

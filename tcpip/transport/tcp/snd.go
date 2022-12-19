@@ -193,6 +193,7 @@ func newSender(ep *endpoint, iss, irs seqnum.Value, sndWnd seqnum.Size, mss uint
 	s := &sender{
 		ep:             ep,
 		sndCwnd:        InitialCwnd, // TODO 暂时写死 tcp拥塞窗口 决定了发送窗口的初始大小
+		sndSsthresh:    math.MaxInt64,
 		sndWnd:         sndWnd,
 		sndUna:         iss + 1,
 		sndNxt:         iss + 1, // 缓存长度为0
@@ -350,6 +351,24 @@ func (s *sender) updateRTO(rtt time.Duration) {
 	}
 }
 
+// resendSegment resends the first unacknowledged segment.
+// tcp的拥塞控制：快速重传
+// 快速重传就是基于以下机制：
+// 如果假设重复阈值为3，当发送方收到4次相同确认号的分段确认（第1次收到确认期望序列号，加3次重复的期望序列号确认）时，
+// 则可以认为继续发送更高序列号的分段将会被接受方丢弃，而且会无法有序送达。
+// 发送方应该忽略超时计时器的等待重发，立即重发重复分段确认中确认号对应序列号的分段。
+func (s *sender) resendSegment() {
+  // Don't use any segments we already sent to measure RTT as they may
+  // have been affected by packets being lost.
+  s.rttMeasureSeqNum = s.sndNxt
+
+  // Resend the segment.
+  if seg := s.writeList.Front(); seg != nil {
+		logger.NOTICE("重复发送...")
+    s.sendSegment(seg.data, seg.flags, seg.sequenceNumber)
+  }
+}
+
 // sendSegment sends a new segment containing the given payload, flags and
 // sequence number.
 // 根据给定的参数，负载数据、flags标记和序列号来发送数据
@@ -378,9 +397,6 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 
 	// tcp的拥塞控制：检查是否有重复的ack，是否进入快速重传和快速恢复状态
 	rtx := s.checkDuplicateAck(seg)
-	if rtx {
-
-	}
 
 	// 存放当前窗口大小。
 	s.sndWnd = seg.window
@@ -403,7 +419,7 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 		s.sndUna = ack
 
 		ackLeft := acked
-		//originalOutstanding := s.outstanding
+		originalOutstanding := s.outstanding
 		// 从发送链表中删除已经确认的数据，发送窗口的滑动。
 		for ackLeft > 0 { // 有成功确认的数据 丢弃它们 有剩余数据的话继续发送(根据拥塞策略控制)
 			seg := s.writeList.Front()
@@ -427,6 +443,13 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 		// 当收到ack确认时，需要更新发送缓冲占用
 		s.ep.updateSndBufferUsage(int(acked))
 
+		// tcp拥塞控制：如果没有进入快速恢复状态，那么根据确认的数据包的数量更新拥塞窗口。
+    if !s.fr.active {
+      // 调用相应拥塞控制算法的 Update
+      s.cc.Update(originalOutstanding - s.outstanding)
+    }
+
+
 		// 如果发生超时重传时，s.outstanding可能会降到零以下，
 		// 重置为零但后来得到一个覆盖先前发送数据的确认。
 		if s.outstanding < 0 {
@@ -434,7 +457,13 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 		}
 	}
 
-	// TODO tcp拥塞控制
+	// tcp拥塞控制 快速重传
+	if rtx {
+		logger.NOTICE("重复收到3个ack报文 启动快速重传...")
+		s.resendSegment()
+	}
+	//log.Fatal(s.sndCwnd, s.sndSsthresh)
+
 	if s.ep.id.LocalPort != 9999 {
 		log.Println(s)
 	}
@@ -569,6 +598,15 @@ func (s *sender) sendData() {
 	}
 }
 
+// 进入快速恢复和相应的处理
+func (s *sender) enterFastRecovery() {
+	s.fr.active = true
+	s.sndCwnd = s.sndSsthresh + 3
+  //s.fr.first = s.sndUna
+  //s.fr.last = s.sndNxt - 1
+  //s.fr.maxCwnd = s.sndCwnd + s.outstanding
+}
+
 // tcp拥塞控制：收到确认时调用 checkDuplicateAck。它管理与重复确认相关的状态，
 // 并根据RFC 6582（NewReno）中的规则确定是否需要重新传输
 func (s *sender) checkDuplicateAck(seg *segment) (rtx bool) {
@@ -596,8 +634,11 @@ func (s *sender) checkDuplicateAck(seg *segment) (rtx bool) {
 	}
 
 	// 调用拥塞控制的 HandleNDupAcks 处理三次重复ack
+	// 这里将会缩小拥塞阈值
 	s.cc.HandleNDupAcks()
-
+	// 进入快速恢复状态
+	s.enterFastRecovery()
+	s.dupAckCount = 0
 	return true
 }
 
