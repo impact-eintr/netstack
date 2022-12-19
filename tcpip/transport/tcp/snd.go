@@ -185,7 +185,11 @@ type rtt struct {
 // fastRecovery 保存与数据包丢失快速恢复相关的信息
 type fastRecovery struct {
 	active bool
-	// TODO 需要添加
+	// TODO 需要解释
+	first seqnum.Value
+	last seqnum.Value
+
+	maxCwnd int
 }
 
 // 新建并初始化发送器 irs是cookies
@@ -307,7 +311,6 @@ func (s *sender) updateRTO(rtt time.Duration) {
 		s.rtt.rttvar = rtt / 2
 		s.srttInited = true
 	} else {
-		log.Println("之后的计算")
 		// |rtt-srtt| 标准差
 		diff := s.rtt.srtt - rtt
 		if diff < 0 {
@@ -349,6 +352,7 @@ func (s *sender) updateRTO(rtt time.Duration) {
 	if s.rto < minRTO {
 		s.rto = minRTO
 	}
+	logger.NOTICE("更新RTO RTT", s.rto.String(), rtt.String())
 }
 
 // resendSegment resends the first unacknowledged segment.
@@ -390,7 +394,6 @@ func (s *sender) sendSegment(data buffer.VectorisedView, flags byte, seq seqnum.
 func (s *sender) handleRcvdSegment(seg *segment) {
 	// 如果rtt测量seq小于ack num，更新rto
 	if !s.ep.sendTSOk && s.rttMeasureSeqNum.LessThan(seg.ackNumber) {
-		log.Fatal("测试")
 		s.updateRTO(time.Now().Sub(s.rttMeasureTime))
 		s.rttMeasureSeqNum = s.sndNxt
 	}
@@ -410,8 +413,8 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 		if s.ep.sendTSOk && seg.parsedOptions.TSEcr != 0 {
 			// TSVal/Ecr values sent by Netstack are at a millisecond
 			// granularity.
-			//elapsed := time.Duration(s.ep.timestamp()-seg.parsedOptions.TSEcr) * time.Millisecond
-			//s.updateRTO(elapsed)
+			elapsed := time.Duration(s.ep.timestamp()-seg.parsedOptions.TSEcr) * time.Millisecond
+			s.updateRTO(elapsed)
 		}
 		// 获取这次确认的字节数，即 ack - snaUna
 		acked := s.sndUna.Size(ack)
@@ -507,6 +510,7 @@ func (s *sender) sendData() {
 
 	// 如果TCP在超过重新传输超时的时间间隔内没有发送数据，TCP应该在开始传输之前将cwnd设置为不超过RW。
 	if !s.fr.active && time.Now().Sub(s.lastSendTime) > s.rto {
+		log.Fatal("重置sndCwnd")
 		if s.sndCwnd > InitialCwnd {
 			s.sndCwnd = InitialCwnd
 		}
@@ -588,8 +592,6 @@ func (s *sender) sendData() {
 		// NOTE 开启计时器 如果在RTO后没有回信(snd.handleRecvdSegment 中有数据可以处理) 那么将会重发
 		// 在 s.resendTimer.init() 中 将会调用 Assert() 唤醒重发函数 retransmitTimerExpired()
 		s.resendTimer.enable(s.rto)
-		logger.NOTICE("注意测试 RTO")
-		log.Println("RTO: ", s.rto)
 	}
 
 	// NOTE 如果我们的发送窗口被缩到0 我们需要定时去问一下对端消费完了没
@@ -598,14 +600,34 @@ func (s *sender) sendData() {
 	}
 }
 
-// 进入快速恢复和相应的处理
+// 进入快速恢复和相应的处理 快速重传和快速恢复算法一般同时使用。
+// 快速恢复算法是认为，你还有 3 个Duplicated Acks回来，说明网络也不那么糟糕，所以没有必要像 RTO 超时那么强烈
 func (s *sender) enterFastRecovery() {
 	s.fr.active = true
+	// 注意，正如前面所说，进入快速重传之前，sshthresh 已被更新ssthresh = max (cwnd/2, 2)然后，真正的Fast Recovery算法如下：
+	// 1. cwnd = sshthresh + 3（3 的意思是确认有 3 个数据包被收到了）
+	// 2. 重传重复 ACKs 指定的数据包
+	// 3. 如果再收到重复 Acks，那么cwnd = cwnd + 1；如果收到了新的 Ack，那么，cwnd = sshthresh，然后就进入了拥塞避免的算法了。
 	s.sndCwnd = s.sndSsthresh + 3
-  //s.fr.first = s.sndUna
-  //s.fr.last = s.sndNxt - 1
-  //s.fr.maxCwnd = s.sndCwnd + s.outstanding
+  s.fr.first = s.sndUna
+  s.fr.last = s.sndNxt - 1
+	logger.NOTICE("快速恢复的范围: ", atoi(s.fr.first), atoi(s.fr.last), atoi(s.fr.last-s.fr.first)) // 一般是4个报文的长度
+  s.fr.maxCwnd = s.sndCwnd + s.outstanding
 }
+
+// tcp拥塞控制：退出快速恢复状态和相应的处理
+func (s *sender) leaveFastRecovery() {
+  s.fr.active = false
+  s.fr.first = 0
+  s.fr.last = s.sndNxt - 1
+  s.fr.maxCwnd = 0
+  s.dupAckCount = 0
+
+  // Deflate cwnd. It had been artificially inflated when new dups arrived.
+  s.sndCwnd = s.sndSsthresh
+  s.cc.PostRecovery()
+}
+
 
 // tcp拥塞控制：收到确认时调用 checkDuplicateAck。它管理与重复确认相关的状态，
 // 并根据RFC 6582（NewReno）中的规则确定是否需要重新传输

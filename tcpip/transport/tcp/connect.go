@@ -199,8 +199,8 @@ func (h *handshake) checkAck(s *segment) bool {
 		// incoming segment acknowledges something not yet sent. The
 		// connection remains in the same state.
 		// TODO 返回一个RST报文
-		//ack := s.sequenceNumber.Add(s.logicalLen())
-		//h.ep.sendRaw(buffer.VectorisedView{}, flagRst|flagAck, s.ackNumber, ack, 0)
+		ack := s.sequenceNumber.Add(s.logicalLen())
+		h.ep.sendRaw(buffer.VectorisedView{}, flagRst|flagAck, s.ackNumber, ack, 0)
 		return false
 	}
 
@@ -657,9 +657,9 @@ func (e *endpoint) makeOptions(sackBlocks []header.SACKBlock) []byte {
 func (e *endpoint) sendRaw(data buffer.VectorisedView, flags byte, seq, ack seqnum.Value, rcvWnd seqnum.Size) *tcpip.Error {
 	var sackBlocks []header.SACKBlock
 	// TODO 填充配置
-	//if e.state == stateConnected && e.rcv.pendingBufSize > 0 && (flags&flagAck != 0) {
-	//	sackBlocks = e.sack.Blocks[:e.sack.NumBlocks]
-	//}
+	if e.state == stateConnected && e.rcv.pendingBufSize > 0 && (flags&flagAck != 0) {
+		sackBlocks = e.sack.Blocks[:e.sack.NumBlocks]
+	}
 	options := e.makeOptions(sackBlocks)
 	err := sendTCP(&e.route, e.id, data, e.route.DefaultTTL(), flags, seq, ack, rcvWnd, options)
 	putOptions(options)

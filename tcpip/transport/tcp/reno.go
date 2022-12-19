@@ -26,14 +26,14 @@ func (r *renoState) updateSlowStart(packetsAcked int) int  {
 	packetsAcked -= newcwnd - r.s.sndCwnd
 	// 更新拥塞窗口
 	r.s.sndCwnd = newcwnd
-	logger.NOTICE("慢启动 reno Update 新的拥塞窗口大小: ", atoi(r.s.sndCwnd))
+	logger.NOTICE("慢启动中。。。 reno Update 新的拥塞窗口大小: ", atoi(r.s.sndCwnd))
 	return packetsAcked
 }
 
 // updateCongestionAvoidance 将在拥塞避免模式下更新拥塞窗口，
 // 如RFC5681第3.1节所述
 func (r *renoState) updateCongestionAvoidance(packetsAcked int) {
-
+	logger.FIXME("超过阈值后调整拥塞窗口 拥塞避免阶段")
 }
 
 // 当检测到网络拥塞时，调用 reduceSlowStartThreshold。
@@ -69,8 +69,8 @@ func (r *renoState) Update(packetsAcked int) {
 			return
 		}
 	}
-	// TODO
-	logger.FIXME("超过阈值后调整拥塞窗口")
+	 // 进入拥塞避免阶段
+  r.updateCongestionAvoidance(packetsAcked)
 }
 
 func (r *renoState) PostRecovery() {

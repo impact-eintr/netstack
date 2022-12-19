@@ -49,7 +49,7 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable, payload b
 	// TODO 这里整点活 在特定的情况下丢掉数据报 模拟网络阻塞
 
 	e.count++
-	if e.count == 6 { // 丢掉客户端写入的第二个包
+	if e.count == -1 { // 丢掉客户端写入的第二个包
 		logger.NOTICE(fmt.Sprintf("统计 %d  丢掉这个报文", e.count))
 		return nil
 	}
