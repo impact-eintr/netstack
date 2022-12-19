@@ -133,6 +133,8 @@ func (r *receiver) consumeSegment(s *segment, segSeq seqnum.Value, segLen seqnum
 	return true
 }
 
+var cnt = 1
+
 // handleRcvdSegment handles TCP segments directed at the connection managed by
 // r as they arrive. It is called by the protocol main loop.
 // 从 handleSegments 接收到tcp段，然后进行处理消费，所谓的消费就是将负载内容插入到接收队列中
@@ -153,7 +155,6 @@ func (r *receiver) handleRcvdSegment(s *segment) {
 	// tcp可靠性：r.consumeSegment 返回值是个bool类型，如果是true，表示已经消费该数据段，
 	// 如果不是，那么进行下面的处理，插入到 pendingRcvdSegments，且进行堆排序
 	if !r.consumeSegment(s, segSeq, segLen) {
-		log.Fatal("接受空间告急!!!", r.ep.receiveBufferAvailable())
 		// 如果有负载数据或者是 fin 报文，立即回复一个 ack 报文
 		if segLen > 0 || s.flagIsSet(flagFin) {
 			// We only store the segment if it's within our buffer
@@ -167,11 +168,14 @@ func (r *receiver) handleRcvdSegment(s *segment) {
 			}
 
 			// tcp的可靠性：更新 sack 块信息
-			//UpdateSACKBlocks(&r.ep.sack, segSeq, segSeq.Add(segLen), r.rcvNxt)
+			UpdateSACKBlocks(&r.ep.sack, segSeq, segSeq.Add(segLen), r.rcvNxt)
 
 			// Immediately send an ack so that the peer knows it may
 			// have to retransmit.
+			logger.NOTICE("统计非顺序到达", atoi(cnt))
+			cnt++
 			r.ep.snd.sendAck()
+
 		}
 		return
 	}
@@ -179,8 +183,20 @@ func (r *receiver) handleRcvdSegment(s *segment) {
 	// tcp的可靠性：通过使用当前段，我们可能填补了序列号域中的间隙，该间隙允许现在使用待处理段。
 	// 所以试着去消费等待处理段。
 	for !r.closed && r.pendingRcvdSegments.Len() > 0 {
-		log.Fatal("&&&&&&&&&&&&&&&&&&&&&&&")
-		break
+		//log.Fatal("出现空隙端", r.pendingRcvdSegments.Len())
+		s := r.pendingRcvdSegments[0]
+		segLen := seqnum.Size(s.data.Size())
+		segSeq := s.sequenceNumber
+
+		// 尝试去消费这一片段
+		if !segSeq.Add(segLen-1).LessThan(r.rcvNxt) &&
+			!r.consumeSegment(s, segSeq, segLen) {
+			break
+		}
+		// 如果该tcp段，已经被正确消费，那么从等待处理段中删除
+		heap.Pop(&r.pendingRcvdSegments)
+		r.pendingBufUsed -= s.logicalLen()
+		s.decRef()
 	}
 }
 

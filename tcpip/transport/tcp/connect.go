@@ -797,7 +797,7 @@ func (e *endpoint) keepaliveTimerExpired() *tcpip.Error {
 	return nil
 }
 
-// 充值 keepalive 的时间
+// 重置 keepalive 的时间
 func (e *endpoint) resetKeepaliveTimer(receivedData bool) {
 	e.keepalive.Lock()
 	defer e.keepalive.Unlock()

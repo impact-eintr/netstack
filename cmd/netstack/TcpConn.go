@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"netstack/logger"
 	"netstack/tcpip"
 	"netstack/tcpip/stack"
 	"netstack/tcpip/transport/tcp"
@@ -81,7 +82,7 @@ func (conn *TcpConn) Write(snd []byte) error {
 		n, _, err := conn.ep.Write(tcpip.SlicePayload(snd), tcpip.WriteOptions{To: &conn.raddr})
 		if err != nil {
 			if err == tcpip.ErrWouldBlock {
-				fmt.Println("阻塞力!!!!!!!!!!!!!!!!!")
+				logger.NOTICE("阻塞力!!!!!!!!!!!!!!!!!")
 				<-conn.notifyCh
 				if int(n) < len(snd) && n > 0 {
 					snd = snd[n:]

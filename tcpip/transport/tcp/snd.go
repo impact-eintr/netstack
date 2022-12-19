@@ -202,14 +202,32 @@ func newSender(ep *endpoint, iss, irs seqnum.Value, sndWnd seqnum.Size, mss uint
 		maxPayloadSize: int(mss),
 		maxSentAck:     irs + 1,
 	}
+	// 拥塞控制算法的初始化
+	s.cc = s.initCongestionControl(ep.cc)
+
 	// A negative sndWndScale means that no scaling is in use, otherwise we
 	// store the scaling value.
 	if sndWndScale > 0 {
 		s.sndWndScale = uint8(sndWndScale)
 	}
+
 	s.updateMaxPayloadSize(int(ep.route.MTU()), 0)
+
 	s.resendTimer.init(&s.resendWaker)
+
 	return s
+}
+
+// tcp拥塞控制：根据算法名，新建拥塞控制算法和初始化
+func (s *sender) initCongestionControl(congestionControlName CongestionControlOption) congestionControl {
+	switch congestionControlName {
+	//case ccCubic:
+	//return newCubicCC(s)
+	case ccReno:
+		fallthrough
+	default:
+		return newRenoCC(s)
+	}
 }
 
 // updateMaxPayloadSize updates the maximum payload size based on the given
@@ -346,11 +364,6 @@ func (s *sender) sendSegment(data buffer.VectorisedView, flags byte, seq seqnum.
 	// Remember the max sent ack.
 	s.maxSentAck = rcvNxt
 
-	if s.ep.id.LocalPort == 9999 {
-		//fmt.Println()
-		//log.Println("服务端要求客户端扩展窗口到", rcvWnd, "更新发送端的边缘", old, " TO ", s.maxSentAck)
-		//fmt.Println()
-	}
 	return s.ep.sendRaw(data, flags, seq, rcvNxt, rcvWnd)
 }
 
@@ -358,12 +371,17 @@ func (s *sender) sendSegment(data buffer.VectorisedView, flags byte, seq seqnum.
 func (s *sender) handleRcvdSegment(seg *segment) {
 	// 如果rtt测量seq小于ack num，更新rto
 	if !s.ep.sendTSOk && s.rttMeasureSeqNum.LessThan(seg.ackNumber) {
+		log.Fatal("测试")
 		s.updateRTO(time.Now().Sub(s.rttMeasureTime))
 		s.rttMeasureSeqNum = s.sndNxt
 	}
 
-	// 现在某些待处理数据已被确认，或者窗口打开，或者由于快速恢复期间出现重复的ack而导致拥塞窗口膨胀，
-	// 因此发送更多数据。如果需要，这也将重新启用重传计时器。
+	// tcp的拥塞控制：检查是否有重复的ack，是否进入快速重传和快速恢复状态
+	rtx := s.checkDuplicateAck(seg)
+	if rtx {
+
+	}
+
 	// 存放当前窗口大小。
 	s.sndWnd = seg.window
 	// 获取确认号
@@ -421,6 +439,8 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 		log.Println(s)
 	}
 
+	// 现在某些待处理数据已被确认，或者窗口打开，或者由于快速恢复期间出现重复的ack而导致拥塞窗口膨胀，
+	// 因此发送更多数据。如果需要，这也将重新启用重传计时器。
 	s.sendData()
 }
 
@@ -456,12 +476,19 @@ func (s *sender) retransmitTimerExpired() bool {
 func (s *sender) sendData() {
 	limit := s.maxPayloadSize //最开始是65483
 
+	// 如果TCP在超过重新传输超时的时间间隔内没有发送数据，TCP应该在开始传输之前将cwnd设置为不超过RW。
+	if !s.fr.active && time.Now().Sub(s.lastSendTime) > s.rto {
+		if s.sndCwnd > InitialCwnd {
+			s.sndCwnd = InitialCwnd
+		}
+	}
+
 	var seg *segment
 	end := s.sndUna.Add(s.sndWnd)
 	var dataSent bool
 	// 遍历发送链表，发送数据
 	// tcp拥塞控制：s.outstanding < s.sndCwnd 判断正在发送的数据量不能超过拥塞窗口。
-	for seg = s.writeNext; seg != nil && s.outstanding < s.sndCwnd; seg = seg.Next() {
+	for seg = s.writeNext; seg != nil && s.outstanding < s.sndCwnd; seg = seg.Next() { // 首次发送不会超过两个包
 		// 如果seg的flags是0，将flags改为psh|ack
 		if seg.flags == 0 {
 			seg.sequenceNumber = s.sndNxt
@@ -527,20 +554,51 @@ func (s *sender) sendData() {
 	// Remember the next segment we'll write.
 	s.writeNext = seg
 
-	// NOTE 如果对端的接收窗口为0 我们需要定时去问一下他消费完了没
 	// 如果重传定时器没有启动 且 sndUna != sndNxt 启动定时器
 	if !s.resendTimer.enabled() && s.sndUna != s.sndNxt {
 		// NOTE 开启计时器 如果在RTO后没有回信(snd.handleRecvdSegment 中有数据可以处理) 那么将会重发
 		// 在 s.resendTimer.init() 中 将会调用 Assert() 唤醒重发函数 retransmitTimerExpired()
 		s.resendTimer.enable(s.rto)
+		logger.NOTICE("注意测试 RTO")
+		log.Println("RTO: ", s.rto)
 	}
 
-	// TODO KEEPALIVE
+	// NOTE 如果我们的发送窗口被缩到0 我们需要定时去问一下对端消费完了没
 	if s.sndUna == s.sndNxt {
 		s.ep.resetKeepaliveTimer(false)
 	}
+}
 
-	time.Sleep(20 * time.Millisecond)
+// tcp拥塞控制：收到确认时调用 checkDuplicateAck。它管理与重复确认相关的状态，
+// 并根据RFC 6582（NewReno）中的规则确定是否需要重新传输
+func (s *sender) checkDuplicateAck(seg *segment) (rtx bool) {
+	ack := seg.ackNumber
+	//logger.NOTICE("注意测试", atoi(s.sndCwnd))
+	// 已经启动了快速恢复
+	if s.fr.active {
+	}
+
+	// 我们还没有进入快速恢复状态，只有当段不携带任何数据并且不更新发送窗口时，才认为该段是重复的。
+	if ack != s.sndUna /*最新的没有被确认的seq*/ ||
+		seg.logicalLen() != 0 /*没有任何数据的ack包*/ ||
+		s.sndWnd != seg.window /*不要求更新窗口*/ ||
+		ack == s.sndNxt {
+		s.dupAckCount = 0
+		return false
+	}
+
+	// 到这表示收到一个重复的ack
+	s.dupAckCount++
+
+	// 收到三次的重复ack才会进入快速恢复。
+	if s.dupAckCount < nDupAckThreshold {
+		return false
+	}
+
+	// 调用拥塞控制的 HandleNDupAcks 处理三次重复ack
+	s.cc.HandleNDupAcks()
+
+	return true
 }
 
 var fmtSender string = `%s
