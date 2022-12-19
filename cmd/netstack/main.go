@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"net"
 	"netstack/logger"
@@ -181,8 +180,8 @@ func main() {
 
 		log.Printf("\n\n客户端 写入数据")
 
-		for i := 0; i < 6; i++ {
-			conn.Write(make([]byte, 1<<10))
+		for i := 0; i < 1; i++ {
+			conn.Write(make([]byte, 1<<20))
 
 			//buf := make([]byte, 1024)
 			//n, err := conn.Read(buf)
@@ -191,24 +190,24 @@ func main() {
 			//	break
 			//}
 			//logger.NOTICE(string(buf[:n]))
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(5 * time.Millisecond)
 		}
 
 		select {}
 		conn.Close()
 	}()
 
-	l, err := net.Listen("tcp", "127.0.0.1:9999")
-	if err != nil {
-		fmt.Println("Error listening:", err)
-		os.Exit(1)
-	}
-	rcv := &RCV{
-		Stack:  s,
-		rcvBuf: make([]byte, 1<<20),
-	}
+	//l, err := net.Listen("tcp", "127.0.0.1:9999")
+	//if err != nil {
+	//	fmt.Println("Error listening:", err)
+	//	os.Exit(1)
+	//}
+	//rcv := &RCV{
+	//	Stack:  s,
+	//	rcvBuf: make([]byte, 1<<20),
+	//}
 
-	TCPServer(l, rcv)
+	//TCPServer(l, rcv)
 
 	defer close(done)
 	c := make(chan os.Signal)
