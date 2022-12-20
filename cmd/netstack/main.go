@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"netstack/logger"
@@ -147,16 +148,18 @@ func main() {
 			log.Println("服务端 建立连接")
 
 			go func() {
+				cnt := 0
 				for {
 					// 一个慢读者 才能体现出网络的情况
-					time.Sleep(500 * time.Millisecond)
+					time.Sleep(10 * time.Millisecond)
 					buf := make([]byte, 1024)
 					n, err := conn.Read(buf)
 					if err != nil {
 						log.Println(n, err)
 						break
 					}
-					logger.NOTICE("服务端读取了数据", string(buf))
+					cnt+=n
+					logger.NOTICE("服务端读取了数据", fmt.Sprintf("n: %d, cnt: %d", n, cnt), string(buf))
 					//conn.Write([]byte("Hello Client"))
 				}
 			}()
@@ -180,9 +183,10 @@ func main() {
 
 		log.Printf("\n\n客户端 写入数据")
 
-		for i := 0; i < 1; i++ {
-			conn.Write(make([]byte, 1<<20))
-
+		cnt := 0
+		for i := 0; i < 10; i++ {
+			conn.Write(make([]byte, 1<<(5)))
+			cnt += 1<<(5)
 			//buf := make([]byte, 1024)
 			//n, err := conn.Read(buf)
 			//if err != nil {
@@ -190,8 +194,10 @@ func main() {
 			//	break
 			//}
 			//logger.NOTICE(string(buf[:n]))
-			time.Sleep(5 * time.Millisecond)
+			time.Sleep(50 * time.Millisecond)
 		}
+
+		logger.NOTICE("写完了", fmt.Sprintf("共计写入: %d", cnt))
 
 		select {}
 		conn.Close()

@@ -335,6 +335,7 @@ func (e *endpoint) readLocked() (buffer.View, *tcpip.Error) {
 	e.rcvBufUsed -= len(v)
 	if wasZero && !e.zeroReceiveWindow(scale) { // 之前没空闲 现在有了 告知一下对端
 		e.notifyProtocolGoroutine(notifyNonZeroReceiveWindow)
+		logger.NOTICE("通知上层有了空间")
 	}
 
 	return v, nil
@@ -565,17 +566,17 @@ func (e *endpoint) connect(addr tcpip.FullAddress, handshake bool, run bool) (er
 	// Connect in the restore phase does not perform handshake. Restore its
 	// connection setting here.
 	if !handshake {
-		//e.segmentQueue.mu.Lock()
-		//for _, l := range []segmentList{e.segmentQueue.list, e.sndQueue, e.snd.writeList} {
-		//	for s := l.Front(); s != nil; s = s.Next() {
-		//		s.id = e.id
-		//		s.route = r.Clone()
-		//		e.sndWaker.Assert()
-		//	}
-		//}
-		//e.segmentQueue.mu.Unlock()
-		//e.snd.updateMaxPayloadSize(int(e.route.MTU()), 0)
-		//e.state = stateConnected
+		e.segmentQueue.mu.Lock()
+		for _, l := range []segmentList{e.segmentQueue.list, e.sndQueue, e.snd.writeList} {
+			for s := l.Front(); s != nil; s = s.Next() {
+				s.id = e.id
+				s.route = r.Clone()
+				e.sndWaker.Assert()
+			}
+		}
+		e.segmentQueue.mu.Unlock()
+		e.snd.updateMaxPayloadSize(int(e.route.MTU()), 0)
+		e.state = stateConnected
 	}
 
 	if run {

@@ -14,7 +14,7 @@ func newRenoCC(s *sender) *renoState {
 // updateSlowStart 将根据NewReno使用的慢启动算法更新拥塞窗口。
 // 如果在调整拥塞窗口后我们越过了 SSthreshold ，那么它将返回在拥塞避免模式下必须消耗的数据包的数量。
 func (r *renoState) updateSlowStart(packetsAcked int) int  {
-	// 在慢启动阶段，每次收到ack，sndCwnd加上已确认的段数
+	// 在慢启动阶段，每当收到一个 ACK，cwnd++; 呈线性上升
 	newcwnd := r.s.sndCwnd + packetsAcked
 	// 判断增大过后的拥塞窗口是否超过慢启动阀值 sndSsthresh，
 	// 如果超过 sndSsthresh ，将窗口调整为 sndSsthresh
@@ -32,8 +32,16 @@ func (r *renoState) updateSlowStart(packetsAcked int) int  {
 
 // updateCongestionAvoidance 将在拥塞避免模式下更新拥塞窗口，
 // 如RFC5681第3.1节所述
+// 每当收到一个 ACK 时，cwnd = cwnd + 1/cwnd
+// 每当过一个 RTT 时，cwnd = cwnd + 1
 func (r *renoState) updateCongestionAvoidance(packetsAcked int) {
-	logger.FIXME("超过阈值后调整拥塞窗口 拥塞避免阶段")
+	// sndCAAckCount 累计收到的tcp段数
+  r.s.sndCAAckCount += packetsAcked
+  // 如果累计的段数超过当前的拥塞窗口，那么 sndCwnd 加上 sndCAAckCount/sndCwnd 的整数倍
+  if r.s.sndCAAckCount >= r.s.sndCwnd {
+    r.s.sndCwnd += r.s.sndCAAckCount / r.s.sndCwnd
+    r.s.sndCAAckCount = r.s.sndCAAckCount % r.s.sndCwnd
+  }
 }
 
 // 当检测到网络拥塞时，调用 reduceSlowStartThreshold。
@@ -56,7 +64,15 @@ func (r *renoState) HandleNDupAcks() {
 }
 
 func (r *renoState) HandleRTOExpired() {
+	// We lost a packet, so reduce ssthresh.
+	// 减小慢启动阀值
+	r.reduceSlowStartThreshold()
 
+	// Reduce the congestion window to 1, i.e., enter slow-start. Per
+	// RFC 5681, page 7, we must use 1 regardless of the value of the
+	// initial congestion window.
+	// 更新拥塞窗口为1，这样就会重新进入慢启动
+	r.s.sndCwnd = 1
 }
 
 // packetsAcked 已经确认过的数据段数
@@ -69,7 +85,7 @@ func (r *renoState) Update(packetsAcked int) {
 			return
 		}
 	}
-	 // 进入拥塞避免阶段
+	 // 当拥塞窗口大于阈值时  进入拥塞避免阶段
   r.updateCongestionAvoidance(packetsAcked)
 }
 

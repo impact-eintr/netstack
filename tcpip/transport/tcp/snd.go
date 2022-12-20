@@ -352,7 +352,7 @@ func (s *sender) updateRTO(rtt time.Duration) {
 	if s.rto < minRTO {
 		s.rto = minRTO
 	}
-	logger.NOTICE("更新RTO RTT", s.rto.String(), rtt.String())
+	logger.NOTICE("更新RTO", s.rto.String()," RTT:",  rtt.String())
 }
 
 // resendSegment resends the first unacknowledged segment.
@@ -465,7 +465,6 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 		logger.NOTICE("重复收到3个ack报文 启动快速重传...")
 		s.resendSegment()
 	}
-	//log.Fatal(s.sndCwnd, s.sndSsthresh)
 
 	if s.ep.id.LocalPort != 9999 {
 		log.Println(s)
@@ -510,7 +509,6 @@ func (s *sender) sendData() {
 
 	// 如果TCP在超过重新传输超时的时间间隔内没有发送数据，TCP应该在开始传输之前将cwnd设置为不超过RW。
 	if !s.fr.active && time.Now().Sub(s.lastSendTime) > s.rto {
-		log.Fatal("重置sndCwnd")
 		if s.sndCwnd > InitialCwnd {
 			s.sndCwnd = InitialCwnd
 		}
