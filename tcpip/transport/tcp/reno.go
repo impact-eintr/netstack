@@ -4,6 +4,7 @@ import "netstack/logger"
 
 type renoState struct {
 	s *sender
+	cnt int
 }
 
 // 新建reno算法对象
@@ -15,6 +16,7 @@ func newRenoCC(s *sender) *renoState {
 // 如果在调整拥塞窗口后我们越过了 SSthreshold ，那么它将返回在拥塞避免模式下必须消耗的数据包的数量。
 func (r *renoState) updateSlowStart(packetsAcked int) int  {
 	// 在慢启动阶段，每当收到一个 ACK，cwnd++; 呈线性上升
+	oldcwnd := r.s.sndCwnd
 	newcwnd := r.s.sndCwnd + packetsAcked
 	// 判断增大过后的拥塞窗口是否超过慢启动阀值 sndSsthresh，
 	// 如果超过 sndSsthresh ，将窗口调整为 sndSsthresh
@@ -26,7 +28,8 @@ func (r *renoState) updateSlowStart(packetsAcked int) int  {
 	packetsAcked -= newcwnd - r.s.sndCwnd
 	// 更新拥塞窗口
 	r.s.sndCwnd = newcwnd
-	logger.NOTICE("慢启动中。。。 reno Update 新的拥塞窗口大小: ", atoi(r.s.sndCwnd))
+	r.cnt++
+	logger.NOTICE("一个 RTT 已经结束", atoi(oldcwnd), "慢启动中。。。 reno Update 新的拥塞窗口大小: ", atoi(r.s.sndCwnd), "轮次", atoi(r.cnt))
 	return packetsAcked
 }
 

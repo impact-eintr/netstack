@@ -20,7 +20,7 @@ const (
 
 	// InitialCwnd is the initial congestion window.
 	// 初始拥塞窗口大小
-	InitialCwnd = 10
+	InitialCwnd = 1
 
 	// nDupAckThreshold is the number of duplicate ACK's required
 	// before fast-retransmit is entered.
@@ -410,6 +410,7 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 		// 收到了东西 就暂停计时
 		s.resendTimer.disable()
 
+		// NOTE 一个RTT 结束
 		if s.ep.sendTSOk && seg.parsedOptions.TSEcr != 0 {
 			// TSVal/Ecr values sent by Netstack are at a millisecond
 			// granularity.
@@ -567,7 +568,8 @@ func (s *sender) sendData() {
 				"最多发送数据", available,
 				"缓存数据头", seg.sequenceNumber,
 				"缓存数据尾", segEnd,
-				"发送端缓存包数量", s.outstanding)
+				"发送端缓存包数量", s.outstanding,
+				"拥塞窗口为", s.sndCwnd)
 		}
 
 		if !dataSent { // 没有成功发送任何数据

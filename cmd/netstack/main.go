@@ -149,9 +149,9 @@ func main() {
 
 			go func() {
 				cnt := 0
+				time.Sleep(3 * time.Second)
 				for {
 					// 一个慢读者 才能体现出网络的情况
-					time.Sleep(10 * time.Millisecond)
 					buf := make([]byte, 1024)
 					n, err := conn.Read(buf)
 					if err != nil {
@@ -184,7 +184,7 @@ func main() {
 		log.Printf("\n\n客户端 写入数据")
 
 		cnt := 0
-		for i := 0; i < 10; i++ {
+		for i := 0; i < 5; i++ {
 			conn.Write(make([]byte, 1<<(5)))
 			cnt += 1<<(5)
 			//buf := make([]byte, 1024)
@@ -194,7 +194,6 @@ func main() {
 			//	break
 			//}
 			//logger.NOTICE(string(buf[:n]))
-			time.Sleep(50 * time.Millisecond)
 		}
 
 		logger.NOTICE("写完了", fmt.Sprintf("共计写入: %d", cnt))
