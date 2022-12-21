@@ -712,8 +712,6 @@ func (e *endpoint) handleClose() *tcpip.Error {
 // handleSegments 从队列中取出 tcp 段数据，然后处理它们。
 func (e *endpoint) handleSegments() *tcpip.Error {
 	checkRequeue := true
-	// FIXME 用于更清楚地DUBUG 之后删掉
-	time.Sleep(100 * time.Millisecond)
 
 	for i := 0; i < maxSegmentsPerWake; i++ {
 		s := e.segmentQueue.dequeue()

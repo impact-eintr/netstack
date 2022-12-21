@@ -130,6 +130,8 @@ type endpoint struct {
 	// recentTS is the timestamp that should be sent in the TSEcr field of
 	// the timestamp for future segments sent by the endpoint. This field is
 	// updated if required when a new segment is received by this endpoint.
+	// recentTS 是应该在端点发送的未来段的时间戳的 TSEcr 字段中发送的时间戳。
+	// 当此端点接收到新段时，如果需要，此字段会更新。
 	recentTS uint32
 
 	// tsOffset is a randomized offset added to the value of the
@@ -1171,6 +1173,14 @@ func (e *endpoint) receiveBufferSize() int {
 	size := e.rcvBufSize
 	e.rcvListMu.Unlock()
 	return size
+}
+
+// updateRecentTimestamp updates the recent timestamp using the algorithm
+// described in https://tools.ietf.org/html/rfc7323#section-4.3
+func (e *endpoint) updateRecentTimestamp(tsVal uint32, maxSentAck seqnum.Value, segSeq    seqnum.Value) {
+	if e.sendTSOk && seqnum.Value(e.recentTS).LessThan(seqnum.Value(tsVal)) && segSeq.      LessThanEq(maxSentAck) {
+		e.recentTS = tsVal
+	}
 }
 
 // maybeEnableTimestamp marks the timestamp option enabled for this endpoint if

@@ -203,6 +203,7 @@ func newSender(ep *endpoint, iss, irs seqnum.Value, sndWnd seqnum.Size, mss uint
 		sndNxt:         iss + 1, // 缓存长度为0
 		sndNxtList:     iss + 1,
 		rto:            1 * time.Second,
+		rttMeasureSeqNum: iss + 1,
 		lastSendTime:   time.Now(),
 		maxPayloadSize: int(mss),
 		maxSentAck:     irs + 1,
@@ -377,7 +378,7 @@ func (s *sender) resendSegment() {
 // sequence number.
 // 根据给定的参数，负载数据、flags标记和序列号来发送数据
 func (s *sender) sendSegment(data buffer.VectorisedView, flags byte, seq seqnum.Value) *tcpip.Error {
-	s.lastSendTime = time.Now()
+	s.lastSendTime = time.Now() // 发送时间
 	if seq == s.rttMeasureSeqNum {
 		s.rttMeasureTime = s.lastSendTime
 	}
@@ -398,6 +399,8 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 		s.rttMeasureSeqNum = s.sndNxt
 	}
 
+	s.ep.updateRecentTimestamp(seg.parsedOptions.TSVal, s.maxSentAck, seg.sequenceNumber)
+
 	// tcp的拥塞控制：检查是否有重复的ack，是否进入快速重传和快速恢复状态
 	rtx := s.checkDuplicateAck(seg)
 
@@ -405,12 +408,16 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 	s.sndWnd = seg.window
 	// 获取确认号
 	ack := seg.ackNumber
+	if s.ep.id.LocalPort != 9999 {
+		logger.NOTICE("进入处理ack报文", atoi(ack-1), atoi(s.sndUna), atoi(s.sndNxt))
+	}
 	// 如果ack在最小未确认的seq和segNext之间
 	if (ack - 1).InRange(s.sndUna, s.sndNxt) {
 		// 收到了东西 就暂停计时
 		s.resendTimer.disable()
 
 		// NOTE 一个RTT 结束
+		logger.NOTICE(time.Duration(seg.parsedOptions.TSEcr).String())
 		if s.ep.sendTSOk && seg.parsedOptions.TSEcr != 0 {
 			// TSVal/Ecr values sent by Netstack are at a millisecond
 			// granularity.
@@ -467,9 +474,9 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 		s.resendSegment()
 	}
 
-	if s.ep.id.LocalPort != 9999 {
-		log.Println(s)
-	}
+	//if s.ep.id.LocalPort != 9999 {
+	//	log.Println(s)
+	//}
 
 	// 现在某些待处理数据已被确认，或者窗口打开，或者由于快速恢复期间出现重复的ack而导致拥塞窗口膨胀，
 	// 因此发送更多数据。如果需要，这也将重新启用重传计时器。
@@ -577,6 +584,7 @@ func (s *sender) sendData() {
 			// TODO
 		}
 
+		// 发送包 开始计算RTT
 		s.sendSegment(seg.data, seg.flags, seg.sequenceNumber)
 		// 发送一个数据段后，更新sndNxt
 		if s.sndNxt.LessThan(segEnd) {
