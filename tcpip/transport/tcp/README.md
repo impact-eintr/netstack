@@ -324,8 +324,27 @@ TCP 通过维护一个拥塞窗口(cwnd 全称 Congestion Window)来进行拥塞
 
 ### 慢启动（slow start）
 
+慢启动的意思是，加入网络的连接，一点一点地提速，不要一上来就突发流量挤占通道。 慢启动的算法如下：
+
+1. 连接建好的开始先初始化cwnd = 1，表明可以传一个 MSS 大小的数据。
+2. 每当收到一个 ACK，cwnd++; 呈线性上升
+3. 每当过了一个 RTT，cwnd = cwnd*2; 呈指数上升
+4. 设置一个慢启动阀值 ssthresh（slow start threshold），是慢启动和拥塞避免的一个临界值，当cwnd >= ssthresh时，就会进入拥塞避免阶段
+
 ### 拥塞避免（congestion avoidance）
+
+当 cwnd >= ssthresh 时，就会进入“拥塞避免算法”。一般来说初始 ssthresh 的值是很大的，当 cwnd 达到这个值时后，算法如下：
+
+- 每当收到一个 ACK 时，cwnd = cwnd + 1/cwnd
+- 每当过一个 RTT 时，cwnd = cwnd + 1
 
 ### 快速重传（Fast Retransmit）
 
 ### 快速恢复（Fast Recovery）
+
+
+- 1988 年，TCP Tahoe 提出了 1）慢启动，2）拥塞避免，3）快速重传。
+- 1990 年，TCP Reno 在 Tahoe 的基础上增加了 4）快速恢复，是现有的众多拥塞控制算法的基础，被认为标准 tcp 拥塞行为。
+- 2004 年，TCP BIC（Binary Increase Congestion control），在Linux 2.6.8中是默认拥塞控制算法，用的是 Binary Search——二分查找来找拥塞窗口。
+- 2008 年，TCP CUBIC 是比 BIC 更温和和系统化的分支版本，其使用三次函数代替二分算法作为其拥塞窗口算法，并且使用函数拐点作为拥塞窗口的设置值。 Linux 2.6.19后使用该算法作为默认 TCP 拥塞算法，现在也是。
+- 2016 年，TCP BBR 是由 Google 设计，于 2016 年发布的拥塞算法，交替测量一段时间内的带宽极大值和时延极小值，将其乘积作为作为拥塞窗口大小，认为当网络上的数据包总量大于瓶颈链路带宽和时延的乘积时才出现了拥塞。

@@ -1,6 +1,8 @@
 package tcp
 
-import "netstack/logger"
+import (
+	"netstack/logger"
+)
 
 type renoState struct {
 	s *sender

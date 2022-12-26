@@ -506,8 +506,8 @@ func (s *sender) retransmitTimerExpired() bool {
 	s.outstanding = 0
 	s.writeNext = s.writeList.Front()
 	// 重新发送数据包
-	logger.NOTICE("超时重发")
-	s.sendData()
+	logger.NOTICE("暂时关闭超时重发", s.rto.String())
+	//s.sendData()
 	return true
 }
 
@@ -634,6 +634,7 @@ func (s *sender) leaveFastRecovery() {
   // Deflate cwnd. It had been artificially inflated when new dups arrived.
   s.sndCwnd = s.sndSsthresh
   s.cc.PostRecovery()
+	logger.NOTICE("退出快速恢复")
 }
 
 
@@ -641,9 +642,43 @@ func (s *sender) leaveFastRecovery() {
 // 并根据RFC 6582（NewReno）中的规则确定是否需要重新传输
 func (s *sender) checkDuplicateAck(seg *segment) (rtx bool) {
 	ack := seg.ackNumber
-	//logger.NOTICE("注意测试", atoi(s.sndCwnd))
 	// 已经启动了快速恢复
 	if s.fr.active {
+		log.Fatal("启动了快速恢复")
+		if !ack.InRange(s.sndUna, s.sndNxt+1) {
+			return false
+		}
+
+		// 如果它确认此快速恢复涵盖的所有数据，退出快速恢复。
+		if s.fr.last.LessThan(ack) {
+			s.leaveFastRecovery()
+			return false
+		}
+		// 如果该tcp段有负载或者正在更新窗口，那么不计算这个ack
+		if seg.logicalLen() != 0 || s.sndWnd != seg.window {
+			return false
+		}
+
+		// Inflate the congestion window if we're getting duplicate acks
+		// for the packet we retransmitted.
+		if ack == s.fr.first {
+			// We received a dup, inflate the congestion window by 1
+			// packet if we're not at the max yet.
+			if s.sndCwnd < s.fr.maxCwnd {
+				s.sndCwnd++
+			}
+			return false
+		}
+
+		// A partial ack was received. Retransmit this packet and
+		// remember it so that we don't retransmit it again. We don't
+		// inflate the window because we're putting the same packet back
+		// onto the wire.
+		//
+		// N.B. The retransmit timer will be reset by the caller.
+		s.fr.first = ack
+		s.dupAckCount = 0
+		return true
 	}
 
 	// 我们还没有进入快速恢复状态，只有当段不携带任何数据并且不更新发送窗口时，才认为该段是重复的。

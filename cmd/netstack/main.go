@@ -184,7 +184,7 @@ func main() {
 		log.Printf("\n\n客户端 写入数据")
 
 		cnt := 0
-		for i := 0; i < 10; i++ {
+		for i := 0; i < 20; i++ {
 			conn.Write(make([]byte, 1<<(5)))
 			cnt += 1<<(5)
 			//buf := make([]byte, 1024)
