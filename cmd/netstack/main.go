@@ -149,7 +149,7 @@ func main() {
 
 			go func() {
 				cnt := 0
-				time.Sleep(3 * time.Second)
+				time.Sleep(2 * time.Second)
 				for {
 					// 一个慢读者 才能体现出网络的情况
 					buf := make([]byte, 1024)

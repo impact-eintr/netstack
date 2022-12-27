@@ -171,7 +171,7 @@ func (r *receiver) handleRcvdSegment(s *segment) {
 
 			// Immediately send an ack so that the peer knows it may
 			// have to retransmit.
-			logger.NOTICE("统计非顺序到达", atoi(cnt))
+			//logger.NOTICE("统计非顺序到达", atoi(cnt), " rcv.go 175")
 			cnt++
 			r.ep.snd.sendAck()
 

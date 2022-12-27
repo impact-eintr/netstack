@@ -16,11 +16,11 @@ import (
 
 const (
 	// minRTO is the minimum allowed value for the retransmit timeout.
-	minRTO = 200 * time.Millisecond
+	minRTO = 2000 * time.Millisecond
 
 	// InitialCwnd is the initial congestion window.
 	// 初始拥塞窗口大小
-	InitialCwnd = 1
+	InitialCwnd = 4
 
 	// nDupAckThreshold is the number of duplicate ACK's required
 	// before fast-retransmit is entered.
@@ -353,7 +353,6 @@ func (s *sender) updateRTO(rtt time.Duration) {
 	if s.rto < minRTO {
 		s.rto = minRTO
 	}
-	logger.NOTICE("更新RTO", s.rto.String()," RTT:",  rtt.String())
 }
 
 // resendSegment resends the first unacknowledged segment.
@@ -369,13 +368,13 @@ func (s *sender) resendSegment() {
 
   // Resend the segment.
   if seg := s.writeList.Front(); seg != nil {
-		logger.NOTICE("重复发送...")
+		logger.NOTICE("重复收到3个ack报文 启动快速重传... : ", atoi(seg.sequenceNumber))
     s.sendSegment(seg.data, seg.flags, seg.sequenceNumber)
   }
 }
 
 // sendSegment sends a new segment containing the given payload, flags and
-// sequence number.
+// eequence number.
 // 根据给定的参数，负载数据、flags标记和序列号来发送数据
 func (s *sender) sendSegment(data buffer.VectorisedView, flags byte, seq seqnum.Value) *tcpip.Error {
 	s.lastSendTime = time.Now() // 发送时间
@@ -408,20 +407,20 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 	s.sndWnd = seg.window
 	// 获取确认号
 	ack := seg.ackNumber
-	if s.ep.id.LocalPort != 9999 {
-		logger.NOTICE("进入处理ack报文", atoi(ack-1), atoi(s.sndUna), atoi(s.sndNxt))
-	}
+	//if s.ep.id.LocalPort != 9999 {
+	//	logger.NOTICE("进入处理ack报文", atoi(ack-1), atoi(s.sndUna), atoi(s.sndNxt))
+	//}
 	// 如果ack在最小未确认的seq和segNext之间
 	if (ack - 1).InRange(s.sndUna, s.sndNxt) {
 		// 收到了东西 就暂停计时
 		s.resendTimer.disable()
 
 		// NOTE 一个RTT 结束
-		logger.NOTICE(time.Duration(seg.parsedOptions.TSEcr).String())
 		if s.ep.sendTSOk && seg.parsedOptions.TSEcr != 0 {
 			// TSVal/Ecr values sent by Netstack are at a millisecond
 			// granularity.
 			elapsed := time.Duration(s.ep.timestamp()-seg.parsedOptions.TSEcr) * time.Millisecond
+			//logger.NOTICE("snd 424 ", elapsed.String())
 			s.updateRTO(elapsed)
 		}
 		// 获取这次确认的字节数，即 ack - snaUna
@@ -470,7 +469,6 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 
 	// tcp拥塞控制 快速重传
 	if rtx {
-		logger.NOTICE("重复收到3个ack报文 启动快速重传...")
 		s.resendSegment()
 	}
 
@@ -507,7 +505,8 @@ func (s *sender) retransmitTimerExpired() bool {
 	s.writeNext = s.writeList.Front()
 	// 重新发送数据包
 	logger.NOTICE("暂时关闭超时重发", s.rto.String())
-	//s.sendData()
+	panic(nil)
+	s.sendData()
 	return true
 }
 
@@ -599,6 +598,7 @@ func (s *sender) sendData() {
 	if !s.resendTimer.enabled() && s.sndUna != s.sndNxt {
 		// NOTE 开启计时器 如果在RTO后没有回信(snd.handleRecvdSegment 中有数据可以处理) 那么将会重发
 		// 在 s.resendTimer.init() 中 将会调用 Assert() 唤醒重发函数 retransmitTimerExpired()
+		logger.NOTICE("snd.go 602 ", s.rto.String())
 		s.resendTimer.enable(s.rto)
 	}
 
@@ -634,7 +634,6 @@ func (s *sender) leaveFastRecovery() {
   // Deflate cwnd. It had been artificially inflated when new dups arrived.
   s.sndCwnd = s.sndSsthresh
   s.cc.PostRecovery()
-	logger.NOTICE("退出快速恢复")
 }
 
 
@@ -644,7 +643,6 @@ func (s *sender) checkDuplicateAck(seg *segment) (rtx bool) {
 	ack := seg.ackNumber
 	// 已经启动了快速恢复
 	if s.fr.active {
-		log.Fatal("启动了快速恢复")
 		if !ack.InRange(s.sndUna, s.sndNxt+1) {
 			return false
 		}

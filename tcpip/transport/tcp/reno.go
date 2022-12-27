@@ -53,7 +53,7 @@ func (r *renoState) updateCongestionAvoidance(packetsAcked int) {
 // 它将 sndSsthresh 变为 outstanding 的一半。
 // sndSsthresh 最小为2，因为至少要比丢包后的拥塞窗口（cwnd=1）来的大，才会进入慢启动阶段。
 func (r *renoState) reduceSlowStartThreshold() {
-	r.s.sndSsthresh = r.s.sndSsthresh/2
+	r.s.sndSsthresh = r.s.outstanding/2
 	if r.s.sndSsthresh < 2 {
 		r.s.sndSsthresh = 2
 	}
