@@ -198,7 +198,6 @@ func main() {
 
 		logger.NOTICE("写完了", fmt.Sprintf("共计写入: %d", cnt))
 
-		select {}
 		conn.Close()
 	}()
 
