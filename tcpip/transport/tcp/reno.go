@@ -1,6 +1,7 @@
 package tcp
 
 import (
+	"log"
 	"netstack/logger"
 )
 
@@ -31,7 +32,9 @@ func (r *renoState) updateSlowStart(packetsAcked int) int  {
 	// 更新拥塞窗口
 	r.s.sndCwnd = newcwnd
 	r.cnt++
-	logger.NOTICE("一个 RTT 已经结束", atoi(oldcwnd), "慢启动中。。。 reno Update 新的拥塞窗口大小: ", atoi(r.s.sndCwnd), "轮次", atoi(r.cnt))
+	logger.GetInstance().Info(logger.TCP, func() {
+		logger.NOTICE("一个 RTT 已经结束", atoi(oldcwnd), "慢启动中。。。 reno Update 新的拥塞窗口大小: ", atoi(r.s.sndCwnd), "轮次", atoi(r.cnt))
+	})
 	return packetsAcked
 }
 
@@ -77,6 +80,7 @@ func (r *renoState) HandleRTOExpired() {
 	// RFC 5681, page 7, we must use 1 regardless of the value of the
 	// initial congestion window.
 	// 更新拥塞窗口为1，这样就会重新进入慢启动
+	log.Fatal("重新进入慢启动")
 	r.s.sndCwnd = 1
 }
 

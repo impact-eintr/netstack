@@ -16,7 +16,7 @@ import (
 
 const (
 	// minRTO is the minimum allowed value for the retransmit timeout.
-	minRTO = 2000 * time.Millisecond
+	minRTO = 200 * time.Millisecond
 
 	// InitialCwnd is the initial congestion window.
 	// 初始拥塞窗口大小
@@ -459,7 +459,6 @@ func (s *sender) handleRcvdSegment(seg *segment) {
       s.cc.Update(originalOutstanding - s.outstanding)
     }
 
-
 		// 如果发生超时重传时，s.outstanding可能会降到零以下，
 		// 重置为零但后来得到一个覆盖先前发送数据的确认。
 		if s.outstanding < 0 {
@@ -496,8 +495,23 @@ func (s *sender) retransmitTimerExpired() bool {
 	// 每次超时，rto都变成原来的2倍
 	s.rto *= 2
 
-	// TODO 拥塞控制
-	// FIXME 添加拥塞控制逻辑
+	// tcp的拥塞控制：如果已经是快速恢复阶段，那么退出，因为现在丢包了
+	if s.fr.active {
+		// We were attempting fast recovery but were not successful.
+		// Leave the state. We don't need to update ssthresh because it
+		// has already been updated when entered fast-recovery.
+		// 我们试图快速恢复，但没有成功，退出这个状态。
+		// 我们不需要更新ssthresh，因为它在进入快速恢复时已经更新。
+		s.leaveFastRecovery()
+	}
+
+	// See: https://tools.ietf.org/html/rfc6582#section-3.2 Step 4.
+	// We store the highest sequence number transmitted in cases where
+	// we were not in fast recovery.
+	s.fr.last = s.sndNxt - 1
+
+	// tcp的拥塞控制：处理丢包的情况
+	s.cc.HandleRTOExpired()
 
 	// tcp可靠性：将下一个段标记为第一个未确认的段，然后再次开始发送。将未完成的数据包数设置为0，以便我们能够重新传输。
 	// 当我们收到我们传输的数据时，我们将继续传输（或重新传输）。
@@ -505,7 +519,6 @@ func (s *sender) retransmitTimerExpired() bool {
 	s.writeNext = s.writeList.Front()
 	// 重新发送数据包
 	logger.NOTICE("暂时关闭超时重发", s.rto.String())
-	panic(nil)
 	s.sendData()
 	return true
 }
@@ -598,7 +611,6 @@ func (s *sender) sendData() {
 	if !s.resendTimer.enabled() && s.sndUna != s.sndNxt {
 		// NOTE 开启计时器 如果在RTO后没有回信(snd.handleRecvdSegment 中有数据可以处理) 那么将会重发
 		// 在 s.resendTimer.init() 中 将会调用 Assert() 唤醒重发函数 retransmitTimerExpired()
-		logger.NOTICE("snd.go 602 ", s.rto.String())
 		s.resendTimer.enable(s.rto)
 	}
 
