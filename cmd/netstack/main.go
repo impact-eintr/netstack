@@ -149,24 +149,28 @@ func main() {
 
 			go func(*TcpConn) {
 				cnt := 0
-				time.Sleep(1 * time.Second)
+				time.Sleep(10 * time.Millisecond)
 				for {
 					// 一个慢读者 才能体现出网络的情况
 					buf := make([]byte, 1024)
 					n, err := conn.Read(buf)
 					if err != nil {
 						// TODO 添加一个 error 表明无法继续读取 对端要求关闭
+						log.Println(err)
 						break
 					}
 					cnt+=n
 					logger.NOTICE("服务端读取了数据", fmt.Sprintf("n: %d, cnt: %d", n, cnt), string(buf))
+					conn.Write([]byte("Hello Client"))
 				}
+
+				log.Println("服务端 结束读取")
 
 				// 我端收到了 fin 关闭读 继续写
 				conn.Write([]byte("Bye Client"))
 				// 我端向对端发一个终止报文
 				conn.ep.Close()
-				log.Println("服务端 结束读取")
+				log.Println("服务端 关闭连接")
 
 			}(conn)
 		}
@@ -175,29 +179,32 @@ func main() {
 
 	go func() {
 		<-done
-		logger.NOTICE("客户端上线")
-		port := localPort
-		conn, err := Dial(s, header.IPv4ProtocolNumber, addr, port)
-		if err != nil {
-			log.Fatal(err)
+		for i := 0;i < 100;i++ {
+			port := localPort
+			conn, err := Dial(s, header.IPv4ProtocolNumber, addr, port)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			log.Printf("客户端 建立连接\n\n客户端 写入数据\n")
+
+			for i := 0; i < 3; i++ {
+				conn.Write(make([]byte, 1<<(5)))
+			}
+
+			// TODO 在没有读取完数据情况下直接关闭连接
+
+			buf := make([]byte, 1024)
+			n, err := conn.Read(buf)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			logger.NOTICE(string(buf[:n]))
+
+			conn.Close()
+
 		}
-
-		log.Printf("客户端 建立连接\n\n客户端 写入数据\n")
-
-		for i := 0; i < 3; i++ {
-			conn.Write(make([]byte, 1<<(5)))
-		}
-
-		conn.Close()
-
-		buf := make([]byte, 1024)
-		n, err := conn.Read(buf)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		logger.NOTICE(string(buf[:n]))
-
 	}()
 
 	//l, err := net.Listen("tcp", "127.0.0.1:9999")

@@ -865,7 +865,6 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 
 		e.completeWorkerLocked()
 
-		// TODO 需要添加
 		e.mu.Unlock()
 
 		// When the protocol loop exits we should wake up our waiters.
@@ -1057,7 +1056,7 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 			e.resetConnectionLocked(err)
 			// Lock released below.
 			epilogue()
-			log.Println(err)
+			logger.NOTICE(err.String())
 			return nil
 		}
 	}
