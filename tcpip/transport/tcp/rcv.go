@@ -181,8 +181,9 @@ func (r *receiver) handleRcvdSegment(s *segment) {
 
 	// tcp的可靠性：通过使用当前段，我们可能填补了序列号域中的间隙，该间隙允许现在使用待处理段。
 	// 所以试着去消费等待处理段。
+	// 当进行关闭操作的时候 只关写 不关读
 	for !r.closed && r.pendingRcvdSegments.Len() > 0 {
-		//log.Fatal("出现空隙端", r.pendingRcvdSegments.Len())
+		//log.Fatal("出现空隙段", r.pendingRcvdSegments.Len())
 		s := r.pendingRcvdSegments[0]
 		segLen := seqnum.Size(s.data.Size())
 		segSeq := s.sequenceNumber

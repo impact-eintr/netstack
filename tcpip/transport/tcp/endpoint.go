@@ -122,6 +122,11 @@ type endpoint struct {
 	// workerRunning specifies if a worker goroutine is running.
 	workerRunning bool
 
+	// workerCleanup specifies if the worker goroutine must perform cleanup
+	// before exitting. This can only be set to true when workerRunning is
+	// also true, and they're both protected by the mutex.
+	workerCleanup bool
+
 	// sendTSOk is used to indicate when the TS Option has been negotiated.
 	// When sendTSOk is true every non-RST segment should carry a TS as per
 	// RFC7323#section-1.1
@@ -277,6 +282,8 @@ func (e *endpoint) Close() {
 	// for reuse after Close() is called. If also registered, it means this
 	// is a listening socket, so we must unregister as well otherwise the
 	// next user would fail in Listen() when trying to register.
+	// 释放绑定端口 客户端释放随机绑定的port
+	// 注销协议栈中的端点
 	if e.isPortReserved {
 		e.stack.ReleasePort(e.effectiveNetProtos, ProtocolNumber, e.id.LocalAddress, e.id.LocalPort)
 		e.isPortReserved = false
@@ -287,8 +294,42 @@ func (e *endpoint) Close() {
 		}
 	}
 
-	logger.TODO("添加清理资源的逻辑")
+	tcpip.AddDanglingEndpoint(e)
+	if !e.workerRunning { // workerRunning 监听者 客户端 tcp连接 都会设置
+		e.cleanupLocked()
+	} else {
+		e.workerCleanup = true // 在端点调用了 Close 后将会走这个分支
+		e.notifyProtocolGoroutine(notifyClose)
+	}
 	e.mu.Unlock()
+}
+
+// cleanupLocked frees all resources associated with the endpoint. It is called
+// after Close() is called and the worker goroutine (if any) is done with its
+// work.
+func (e *endpoint) cleanupLocked() {
+	// Close all endpoints that might have been accepted by TCP but not by
+	// the client.
+	if e.acceptedChan != nil { // 监听者
+		close(e.acceptedChan)
+		for n := range e.acceptedChan {
+			n.mu.Lock()
+			n.resetConnectionLocked(tcpip.ErrConnectionAborted)
+			n.mu.Unlock()
+			n.Close()
+		}
+		e.acceptedChan = nil
+	}
+	e.workerCleanup = false
+
+	// 注销掉这个端点
+	if e.isRegistered {
+		e.stack.UnregisterTransportEndpoint(e.boundNICID, e.effectiveNetProtos, ProtocolNumber, e.id)
+	}
+
+	// 释放掉这个路由
+	e.route.Release()
+	tcpip.DeleteDanglingEndpoint(e)
 }
 
 // Read 从tcp的接收队列中读取数据
@@ -596,8 +637,9 @@ func (e *endpoint) Shutdown(flags tcpip.ShutdownFlags) *tcpip.Error {
 	defer e.mu.Unlock()
 	e.shutdownFlags |= flags
 
+
 	switch e.state {
-	case stateConnected: // 客户端关闭
+	case stateConnected: // tcp连接关闭
 		// 不能直接关闭读数据包，因为关闭连接的时候四次挥手还需要读取报文。
 		if (e.shutdownFlags & tcpip.ShutdownWrite) != 0 {
 			e.rcvListMu.Lock()
@@ -605,7 +647,7 @@ func (e *endpoint) Shutdown(flags tcpip.ShutdownFlags) *tcpip.Error {
 			e.rcvListMu.Unlock()
 			if rcvBufUsed > 0 {
 				// 如果接收队列中还有数据 通知对端RESET
-				logger.TODO("通知对端RESET")
+				e.notifyProtocolGoroutine(notifyReset)
 				return nil
 			}
 		}
@@ -617,6 +659,7 @@ func (e *endpoint) Shutdown(flags tcpip.ShutdownFlags) *tcpip.Error {
 			break
 		}
 
+		// 发送一个 FIN 报文 告知对面关闭上层用户程序
 		// Queue fin segment.
 		s := newSegmentFromView(&e.route, e.id, nil)
 		e.sndQueue.PushBack(s)
@@ -627,8 +670,8 @@ func (e *endpoint) Shutdown(flags tcpip.ShutdownFlags) *tcpip.Error {
 
 		// 触发调用 handleClose
 		e.sndCloseWaker.Assert()
-	case stateListen: // 服务端关闭
-		logger.FIXME("添加服务端关闭逻辑")
+	case stateListen: // 监听器关闭
+		logger.FIXME("添加监听器关闭逻辑")
 	default:
 		return tcpip.ErrNotConnected
 	}

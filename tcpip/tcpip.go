@@ -7,6 +7,7 @@ import (
 	"netstack/waiter"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -637,4 +638,37 @@ func (a Address) String() string {
 	default:
 		return fmt.Sprintf("%s", string(a))
 	}
+}
+
+
+// danglingEndpointsMu protects access to danglingEndpoints.
+// 一个摇摆不定的端点 一个行将就木的端点
+var danglingEndpointsMu sync.Mutex
+
+// danglingEndpoints tracks all dangling endpoints no longer owned by the app.
+var danglingEndpoints = make(map[Endpoint]struct{})
+
+// GetDanglingEndpoints returns all dangling endpoints.
+func GetDanglingEndpoints() []Endpoint {
+	es := make([]Endpoint, 0, len(danglingEndpoints))
+	danglingEndpointsMu.Lock()
+	for e := range danglingEndpoints {
+		es = append(es, e)
+	}
+	danglingEndpointsMu.Unlock()
+	return es
+}
+
+// AddDanglingEndpoint adds a dangling endpoint.
+func AddDanglingEndpoint(e Endpoint) {
+	danglingEndpointsMu.Lock()
+	danglingEndpoints[e] = struct{}{}
+	danglingEndpointsMu.Unlock()
+}
+
+// DeleteDanglingEndpoint removes a dangling endpoint.
+func DeleteDanglingEndpoint(e Endpoint) {
+	danglingEndpointsMu.Lock()
+	delete(danglingEndpoints, e)
+	danglingEndpointsMu.Unlock()
 }

@@ -20,7 +20,7 @@ const (
 
 	// InitialCwnd is the initial congestion window.
 	// 初始拥塞窗口大小
-	InitialCwnd = 4
+	InitialCwnd = 10
 
 	// nDupAckThreshold is the number of duplicate ACK's required
 	// before fast-retransmit is entered.
@@ -593,14 +593,14 @@ func (s *sender) sendData() {
 
 		if !dataSent { // 没有成功发送任何数据
 			dataSent = true
-			// TODO
+			s.ep.disableKeepaliveTimer()
 		}
 
 		// 发送包 开始计算RTT
 		s.sendSegment(seg.data, seg.flags, seg.sequenceNumber)
 		// 发送一个数据段后，更新sndNxt
 		if s.sndNxt.LessThan(segEnd) {
-			log.Println("更新sndNxt", s.sndNxt, " 为 ", segEnd, "下一次发送的数据头为", segEnd)
+			log.Println(s.ep.id.LocalPort, " 更新sndNxt", s.sndNxt, " 为 ", segEnd, "下一次发送的数据头为", segEnd)
 			s.sndNxt = segEnd
 		}
 	}

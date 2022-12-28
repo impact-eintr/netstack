@@ -147,23 +147,30 @@ func main() {
 			}
 			log.Println("服务端 建立连接")
 
-			go func() {
+			go func(*TcpConn) {
 				cnt := 0
-				time.Sleep(2 * time.Second)
+				time.Sleep(1 * time.Second)
 				for {
 					// 一个慢读者 才能体现出网络的情况
 					buf := make([]byte, 1024)
 					n, err := conn.Read(buf)
 					if err != nil {
-						log.Println(n, err)
+						// TODO 添加一个 error 表明无法继续读取 对端要求关闭
 						break
 					}
 					cnt+=n
 					logger.NOTICE("服务端读取了数据", fmt.Sprintf("n: %d, cnt: %d", n, cnt), string(buf))
-					//conn.Write([]byte("Hello Client"))
 				}
-			}()
+
+				// 我端收到了 fin 关闭读 继续写
+				conn.Write([]byte("Bye Client"))
+				// 我端向对端发一个终止报文
+				conn.ep.Close()
+				log.Println("服务端 结束读取")
+
+			}(conn)
 		}
+
 	}()
 
 	go func() {
@@ -174,31 +181,23 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		log.Printf("客户端 建立连接\n")
 
-		conn.SetSockOpt(tcpip.KeepaliveEnabledOption(1))
-		conn.SetSockOpt(tcpip.KeepaliveIntervalOption(75 * time.Second))
-		conn.SetSockOpt(tcpip.KeepaliveIdleOption(30 * time.Second)) // 30s的探活心跳
-		conn.SetSockOpt(tcpip.KeepaliveCountOption(9))
+		log.Printf("客户端 建立连接\n\n客户端 写入数据\n")
 
-		log.Printf("\n\n客户端 写入数据")
-
-		cnt := 0
-		for i := 0; i < 20; i++ {
+		for i := 0; i < 3; i++ {
 			conn.Write(make([]byte, 1<<(5)))
-			cnt += 1<<(5)
-			//buf := make([]byte, 1024)
-			//n, err := conn.Read(buf)
-			//if err != nil {
-			//	log.Println(err)
-			//	break
-			//}
-			//logger.NOTICE(string(buf[:n]))
 		}
 
-		logger.NOTICE("写完了", fmt.Sprintf("共计写入: %d", cnt))
-
 		conn.Close()
+
+		buf := make([]byte, 1024)
+		n, err := conn.Read(buf)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		logger.NOTICE(string(buf[:n]))
+
 	}()
 
 	//l, err := net.Listen("tcp", "127.0.0.1:9999")

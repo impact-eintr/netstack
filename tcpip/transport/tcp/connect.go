@@ -172,12 +172,11 @@ func (h *handshake) resolveRoute() *tcpip.Error {
 			// Resolution not completed. Keep trying...
 
 		case wakerForNotification:
-			// TODO
-			//n := h.ep.fetchNotifications()
-			//if n&notifyClose != 0 {
-			//	h.ep.route.RemoveWaker(resolutionWaker)
-			//	return tcpip.ErrAborted
-			//}
+			n := h.ep.fetchNotifications()
+			if n&notifyClose != 0 {
+				h.ep.route.RemoveWaker(resolutionWaker)
+				return tcpip.ErrAborted
+			}
 			//if n&notifyDrain != 0 {
 			//	close(h.ep.drainDone)
 			//	<-h.ep.undrain
@@ -608,8 +607,8 @@ func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.Vectorise
 
 	logger.GetInstance().Info(logger.TCP, func() {
 	})
-	log.Printf("TCP 发送 [%s] 报文片段到 %s, seq: %d, ack: %d, 可接收rcvWnd: %d",
-		flagString(flags), fmt.Sprintf("%s:%d", id.RemoteAddress, id.RemotePort),
+	log.Printf("TCP :%d 发送 [%s] 报文片段到 %s, seq: %d, ack: %d, 可接收rcvWnd: %d",
+		id.LocalPort, flagString(flags), fmt.Sprintf("%s:%d", id.RemoteAddress, id.RemotePort),
 		seq, ack, rcvWnd)
 
 	return r.WritePacket(hdr, data, ProtocolNumber, ttl)
@@ -703,10 +702,30 @@ func (e *endpoint) handleClose() *tcpip.Error {
 	e.handleWrite()
 
 	// Mark send side as closed.
-	// 标记发送器关闭
+	// 标记发送器关闭 标记过之后 e.rcv.closed && e.snd.closed 主循环将会退出
 	e.snd.closed = true
 
 	return nil
+}
+
+func (e *endpoint) resetConnectionLocked(err *tcpip.Error) {
+	e.sendRaw(buffer.VectorisedView{}, flagRst|flagAck, e.snd.sndUna, e.rcv.rcvNxt, 0)
+	e.state = stateError
+	e.hardError = err
+}
+
+func (e *endpoint) completeWorkerLocked() {
+	e.workerRunning = false // 标记当前goroutine已经停运
+	if e.workerCleanup {
+		//if e.id.LocalPort != 9999 {
+		//	logger.NOTICE("客户端开始清理资源")
+		//	log.Println(e.snd.sndUna , e.snd.sndNxtList)
+		//} else {
+		//	logger.NOTICE("服务端开始清理资源")
+		//	log.Println(e.snd.sndUna , e.snd.sndNxtList)
+		//}
+		e.cleanupLocked()
+	}
 }
 
 // handleSegments 从队列中取出 tcp 段数据，然后处理它们。
@@ -753,7 +772,7 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 			// information."
 			// 处理tcp数据段，同时给接收器和发送器
 			// 为何要给发送器传接收到的数据段呢？主要是为了滑动窗口的滑动和拥塞控制处理
-			e.rcv.handleRcvdSegment(s)
+			e.rcv.handleRcvdSegment(s) // 在收到fin报文后 将不再接受任何报文
 			e.snd.handleRcvdSegment(s)
 		}
 		s.decRef() // 该segment处理完成
@@ -829,11 +848,22 @@ func (e *endpoint) disableKeepaliveTimer() {
 
 // protocolMainLoop 是TCP协议的主循环。它在自己的goroutine中运行，负责握手、发送段和处理收到的段
 func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
+	var closeTimer *time.Timer
+	var closeWaker sleep.Waker
 
 	// 收尾工作
 	// 收尾的一些工作
 	epilogue := func() {
 		// e.mu is expected to be hold upon entering this section.
+		if e.snd != nil {
+			e.snd.resendTimer.cleanup() // 放弃所有重发报文
+		}
+
+		if closeTimer != nil {
+			closeTimer.Stop() // 正常结束 MainLoop
+		}
+
+		e.completeWorkerLocked()
 
 		// TODO 需要添加
 		e.mu.Unlock()
@@ -908,6 +938,12 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 			f: e.handleSegments,
 		},
 		{
+			w: &closeWaker,
+			f: func() *tcpip.Error {
+				return tcpip.ErrConnectionAborted // 如果在3s内没有正常结束四次挥手 将强制结束连接
+			},
+		},
+		{
 			w: &e.snd.resendWaker,
 			f: func() *tcpip.Error {
 				// 如果重传触发了，表示在rto时间内没有收到ack包
@@ -939,12 +975,18 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 				}
 
 				if n&notifyReset != 0 {
-
+					e.mu.Lock()
+					e.resetConnectionLocked(tcpip.ErrConnectionAborted)
+					e.mu.Unlock()
 				}
 
-				//if n&notifyClose != 0 && closeTimer == nil {
-				//
-				//}
+				if n&notifyClose != 0 && closeTimer == nil {
+					// Reset the connection 3 seconds after the
+					// endpoint has been closed.
+					closeTimer = time.AfterFunc(3*time.Second, func() {
+						closeWaker.Assert()
+					})
+				}
 
 				if n&notifyDrain != 0 {
 				}
@@ -977,12 +1019,32 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 	}
 	e.rcvListMu.Unlock()
 
-	// TODO 需要添加 workerCleanup
+	e.mu.RLock()
+	if e.workerCleanup {
+		e.notifyProtocolGoroutine(notifyClose)
+	}
+	e.mu.RUnlock()
+
 
 	// 主循环，处理tcp报文
 	// 要使这个主循环结束，也就是tcp连接完全关闭，得同时满足三个条件：
 	// 1，接收器关闭了 2，发送器关闭了 3，下一个未确认的序列号等于添加到发送列表的下一个段的序列号
-	//for !e.rcv.closed || !e.snd.closed || e.snd.sndUna != e.snd.sndNxtList {
+	//
+	// 对于服务端而言:
+	//     1. 在收到 FIN 报文后 在handleSegment 中处理报文时 handleRcvSegment -> consumeSegment 将e.rcv.closed
+	//     2. 在用户层主动调用 Close 时 在Shutdown 中 唤醒 e.sndCloseWaker 执行 handleClose 将e.snd.closed
+	//     3. 在用户层主动调用 Close 后 将会发送给 客户端 一个 FIN 报文  当收到正确的客户端ack时
+	//        如果 e.snd.sndUna == e.snd.sndNxtList 也就是没有可以发送的数据了 服务端就可以退出了
+	//
+	// 对于客户端而言:
+	//     1. 应用层主动调用了 Close -> Shutdown 唤醒e.sndCloseWaker 执行 handleClose
+	//        将e.snd.closed snd设置close并不是关闭写  将会发送给 服务端 一个 FIN 报文  当收到正确的服务端端ack时 客户端不直接退出
+	//        而是等待服务端的后续数据 并且去回复对应的ack 但是服务端并不会去消费这些ack
+	//        NOTE 这里仅仅是不通知上层用户程序消费 底层的重发机制什么的都还在工作 因此仍然是可靠传输
+	//     2. 当客户端收到来自服务端的 FIN 报文的时候 在handleSegment 中处理报文时
+	//        handleRcvSegment -> consumeSegment 将e.rcv.closed
+	//     3. 在收完完 FIN 报文后 e.snd.sndUna == e.snd.sndNxtList 也就是没有可以发送的数据了 客户端就可以退出了
+	//
 	for !e.rcv.closed || !e.snd.closed || e.snd.sndUna != e.snd.sndNxtList {
 		e.workMu.Unlock()
 		// s.Fetch 会返回事件的index，比如 v=0 的话，
@@ -992,7 +1054,7 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 		e.workMu.Lock()
 		if err := funcs[v].f(); err != nil {
 			e.mu.Lock()
-			//e.resetConnectionLocked(err)
+			e.resetConnectionLocked(err)
 			// Lock released below.
 			epilogue()
 			log.Println(err)

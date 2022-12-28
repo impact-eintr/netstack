@@ -1,8 +1,6 @@
 package loopback
 
 import (
-	"fmt"
-	"netstack/logger"
 	"netstack/tcpip"
 	"netstack/tcpip/buffer"
 	"netstack/tcpip/stack"
@@ -51,10 +49,10 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable, payload b
 	//time.Sleep(time.Duration(rand.Intn(50)+50) * time.Millisecond)
 
 	e.count++
-	if e.count == 6 { // 丢掉客户端写入的第二个包
-		logger.NOTICE(fmt.Sprintf("统计 %d  丢掉这个报文", e.count))
-		return nil
-	}
+	//if e.count == 6 { // 丢掉客户端写入的第二个包
+	//	logger.NOTICE(fmt.Sprintf("统计 %d  丢掉这个报文", e.count))
+	//	return nil
+	//}
 	// Because we're immediately turning around and writing the packet back to the
 	// rx path, we intentionally don't preserve the remote and local link
 	// addresses from the stack.Route we're passed.

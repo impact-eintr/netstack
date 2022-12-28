@@ -10,6 +10,7 @@ import (
 	"netstack/tcpip/stack"
 	"netstack/tcpip/transport/tcp"
 	"netstack/waiter"
+	"time"
 )
 
 // Dial 呼叫tcp服务端
@@ -35,6 +36,11 @@ func Dial(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Address,
 			return nil, fmt.Errorf("%s", err.String())
 		}
 	}
+
+	ep.SetSockOpt(tcpip.KeepaliveEnabledOption(1))
+	ep.SetSockOpt(tcpip.KeepaliveIntervalOption(75 * time.Second))
+	ep.SetSockOpt(tcpip.KeepaliveIdleOption(30 * time.Second)) // 30s的探活心跳
+	ep.SetSockOpt(tcpip.KeepaliveCountOption(9))
 
 	return &TcpConn{
 		ep:       ep,
