@@ -331,7 +331,19 @@ func parseSynSegmentOptions(s *segment) header.TCPSynOptions {
 // 在验证通过后 会新建并注册一个 LAddr:LPort+RAddr:RPort的新ep 由它来处理后续的请求
 func (e *endpoint) protocolListenLoop(rcvWnd seqnum.Size) *tcpip.Error {
 	defer func() {
-		// TODO 后置处理
+		e.mu.Lock()
+		e.state = stateClosed
+
+		// Do cleanup if needed.
+		e.completeWorkerLocked()
+
+		//if e.drainDone != nil {
+		//	close(e.drainDone)
+		//}
+		e.mu.Unlock()
+
+		// Notify waiters that the endpoint is shutdown.
+		e.waiterQueue.Notify(waiter.EventIn | waiter.EventOut)
 	}()
 
 	e.mu.Lock()
@@ -366,7 +378,10 @@ func (e *endpoint) protocolListenLoop(rcvWnd seqnum.Size) *tcpip.Error {
 			}
 		case wakerForNotification:
 			// TODO 触发其他事件
-			log.Println("其他事件?")
+			n := e.fetchNotifications()
+			if n&notifyClose != 0 {
+				return nil
+			}
 		default:
 			panic((nil))
 		}

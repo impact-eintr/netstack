@@ -89,8 +89,6 @@ type endpoint struct {
 	lastErrorMu sync.Mutex
 	lastError   *tcpip.Error
 
-	// TODO 需要添加
-
 	// rcvListMu can be taken after the endpoint mu below.
 	rcvListMu  sync.Mutex
 	rcvList    segmentList
@@ -670,8 +668,13 @@ func (e *endpoint) Shutdown(flags tcpip.ShutdownFlags) *tcpip.Error {
 
 		// 触发调用 handleClose
 		e.sndCloseWaker.Assert()
+
 	case stateListen: // 监听器关闭
-		logger.FIXME("添加监听器关闭逻辑")
+		// Tell protocolListenLoop to stop.
+		if flags&tcpip.ShutdownRead != 0 {
+			e.notifyProtocolGoroutine(notifyClose)
+		}
+
 	default:
 		return tcpip.ErrNotConnected
 	}
@@ -687,8 +690,26 @@ func (e *endpoint) Listen(backlog int) (err *tcpip.Error) {
 		}
 	}()
 
-	// TODO 需要添加
-
+	// 如果端点未关闭，则允许调整 backlog。
+	// 当端点关闭时，它将workerCleanup设置为true，从那时起，
+	// acceptedChan 负责 cleanup 方法（并且不应该在其他任何地方触及，包括此处）
+	if e.state == stateListen && !e.workerCleanup {
+		// Adjust the size of the channel iff we can fix existing
+		// pending connections into the new one.
+		if len(e.acceptedChan) > backlog { // 非法的调整 接收队列的端点比目标值小
+			return tcpip.ErrInvalidEndpointState
+		}
+		if cap(e.acceptedChan) == backlog {
+			return nil
+		}
+		origChan := e.acceptedChan
+		e.acceptedChan = make(chan *endpoint, backlog)
+		close(origChan)
+		for ep := range origChan {
+			e.acceptedChan <- ep
+		}
+		return nil
+	}
 	// 在调用 Listen 之前，必须先 Bind
 	if e.state != stateBound {
 		return tcpip.ErrInvalidEndpointState
@@ -702,7 +723,7 @@ func (e *endpoint) Listen(backlog int) (err *tcpip.Error) {
 	e.isRegistered = true
 	e.state = stateListen
 	if e.acceptedChan == nil {
-		e.acceptedChan = make(chan *endpoint, backlog)
+		e.acceptedChan = make(chan *endpoint, backlog) // 全连接队列长度
 	}
 	e.workerRunning = true
 

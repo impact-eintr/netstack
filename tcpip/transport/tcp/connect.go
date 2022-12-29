@@ -197,7 +197,6 @@ func (h *handshake) checkAck(s *segment) bool {
 		// the connection is in any non-synchronized state and an
 		// incoming segment acknowledges something not yet sent. The
 		// connection remains in the same state.
-		// TODO 返回一个RST报文
 		ack := s.sequenceNumber.Add(s.logicalLen())
 		h.ep.sendRaw(buffer.VectorisedView{}, flagRst|flagAck, s.ackNumber, ack, 0)
 		return false
@@ -300,7 +299,6 @@ func (h *handshake) synRcvdState(s *segment) *tcpip.Error {
 
 	// 如果是syn报文，且序列号对应不上，那么返回 rst
 	if s.flagIsSet(flagSyn) && s.sequenceNumber != h.ackNum-1 {
-		// TODO 返回RST报文
 		// We received two SYN segments with different sequence
 		// numbers, so we reset this and restart the whole
 		// process, except that we don't reset the timer.
@@ -748,6 +746,7 @@ func (e *endpoint) handleSegments() *tcpip.Error {
 			// 如果收到 rst 报文
 			if e.rcv.acceptable(s.sequenceNumber, 0) {
 				s.decRef()
+				logger.NOTICE("收到了一个RST报文")
 				return tcpip.ErrConnectionReset
 			}
 		} else if s.flagIsSet(flagAck) {
@@ -1056,7 +1055,6 @@ func (e *endpoint) protocolMainLoop(handshake bool) *tcpip.Error {
 			e.resetConnectionLocked(err)
 			// Lock released below.
 			epilogue()
-			logger.NOTICE(err.String())
 			return nil
 		}
 	}
