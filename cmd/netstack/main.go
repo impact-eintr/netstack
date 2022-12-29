@@ -33,7 +33,7 @@ func main() {
 		log.Fatal("Usage: ", os.Args[0], " <tap-device> <local-address/mask> <ip-address> <local-port>")
 	}
 
-	logger.SetFlags(logger.HANDSHAKE)
+	logger.SetFlags(logger.ETH)
 	log.SetFlags(log.Lshortfile | log.LstdFlags)
 
 	tapName := flag.Arg(0)
@@ -97,8 +97,6 @@ func main() {
 		ResolutionRequired: true,
 	})
 
-	_ = linkID
-
 	loopbackLinkID := loopback.New()
 
 	// 新建相关协议的协议栈
@@ -106,7 +104,13 @@ func main() {
 		[]string{tcp.ProtocolName, udp.ProtocolName}, stack.Options{})
 
 	// 新建抽象的网卡
-	if err := s.CreateNamedNIC(1, "vnic1", loopbackLinkID); err != nil {
+	_ = loopbackLinkID
+	if err := s.CreateNamedNIC(1, "lo", loopbackLinkID); err != nil {
+		log.Fatal(err)
+	}
+
+	_ = linkID
+	if err := s.CreateNamedNIC(2, "fdbase", linkID); err != nil {
 		log.Fatal(err)
 	}
 
@@ -208,7 +212,6 @@ func TestServerEcho(conn *TcpConn) {
 
 	conn.ep.Close()
 }
-
 
 func TestServerCase1(conn *TcpConn) {
 	cnt := 0

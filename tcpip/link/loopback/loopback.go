@@ -44,10 +44,6 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable, payload b
 	views = append(views, payload.Views()...)
 	vv := buffer.NewVectorisedView(len(views[0])+payload.Size(), views)
 
-	// TODO 这里整点活 在特定的情况下丢掉数据报 模拟网络阻塞
-	//rand.Seed(time.Now().Unix())
-	//time.Sleep(time.Duration(rand.Intn(50)+50) * time.Millisecond)
-
 	e.count++
 	//if e.count == 6 { // 丢掉客户端写入的第二个包
 	//	logger.NOTICE(fmt.Sprintf("统计 %d  丢掉这个报文", e.count))

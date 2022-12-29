@@ -1,6 +1,7 @@
 package fdbased
 
 import (
+	"fmt"
 	"log"
 	"netstack/logger"
 	"netstack/tcpip"
@@ -128,7 +129,7 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable,
 	}
 	eth.Encode(ethHdr) // 将以太帧信息作为报文头编入
 	logger.GetInstance().Info(logger.ETH, func() {
-		log.Println("链路层写回以太报文")
+		log.Println("链路层写回以太报文 ", r.LocalAddress, " to ", r.RemoteAddress)
 	})
 	// 写入网卡中
 	if payload.Size() == 0 {

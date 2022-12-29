@@ -150,7 +150,7 @@ func (h *handshake) resetToSynRcvd(iss seqnum.Value, irs seqnum.Value, opts *hea
 	h.sndWndScale = opts.WS
 }
 
-// TODO 处理tcp路由
+// 处理tcp路由
 func (h *handshake) resolveRoute() *tcpip.Error {
 	// Set up the wakers.
 	s := sleep.Sleeper{}
@@ -166,7 +166,6 @@ func (h *handshake) resolveRoute() *tcpip.Error {
 		case wakerForResolution:
 			if _, err := h.ep.route.Resolve(resolutionWaker); err != tcpip.ErrWouldBlock {
 				// Either success (err == nil) or failure.
-				log.Println("没有地址", err)
 				return err
 			}
 			// Resolution not completed. Keep trying...
@@ -406,6 +405,7 @@ func (h *handshake) execute() *tcpip.Error {
 			return err
 		}
 	}
+
 	// Initialize the resend timer.
 	// 初始化重传定时器
 	resendWaker := sleep.Waker{}

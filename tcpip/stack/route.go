@@ -111,6 +111,7 @@ func (r *Route) RemoveWaker(waker *sleep.Waker) {
 
 // IsResolutionRequired returns true if Resolve() must be called to resolve
 // the link address before the this route can be written to.
+// 本地缓存有东西 而且不知道远端的MAC
 func (r *Route) IsResolutionRequired() bool {
 	return r.ref.linkCache != nil && r.RemoteLinkAddress == ""
 }

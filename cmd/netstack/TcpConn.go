@@ -147,7 +147,7 @@ func tcpListen(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Add
 
 	// 绑定IP和端口，这里的IP地址为空，表示绑定任何IP
 	// 此时就会调用端口管理器
-	if err := ep.Bind(tcpip.FullAddress{NIC: 1, Addr: "", Port: uint16(localPort)}, nil); err != nil {
+	if err := ep.Bind(tcpip.FullAddress{NIC: 1, Addr: addr, Port: uint16(localPort)}, nil); err != nil {
 		log.Fatal("Bind failed: ", err)
 	}
 
