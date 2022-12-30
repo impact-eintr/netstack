@@ -9,7 +9,6 @@ import (
 	"netstack/tcpip"
 	"netstack/tcpip/header"
 	"netstack/tcpip/link/fdbased"
-	"netstack/tcpip/link/loopback"
 	"netstack/tcpip/link/tuntap"
 	"netstack/tcpip/network/arp"
 	"netstack/tcpip/network/ipv4"
@@ -95,22 +94,15 @@ func main() {
 		MTU:                1500,
 		Address:            tcpip.LinkAddress(maddr),
 		ResolutionRequired: true,
+		HandleLocal: true,
 	})
-
-	loopbackLinkID := loopback.New()
 
 	// 新建相关协议的协议栈
 	s := stack.New([]string{ipv4.ProtocolName, arp.ProtocolName},
 		[]string{tcp.ProtocolName, udp.ProtocolName}, stack.Options{})
 
 	// 新建抽象的网卡
-	_ = loopbackLinkID
-	if err := s.CreateNamedNIC(1, "lo", loopbackLinkID); err != nil {
-		log.Fatal(err)
-	}
-
-	_ = linkID
-	if err := s.CreateNamedNIC(2, "fdbase", linkID); err != nil {
+	if err := s.CreateNamedNIC(1, "eth0", linkID); err != nil {
 		log.Fatal(err)
 	}
 

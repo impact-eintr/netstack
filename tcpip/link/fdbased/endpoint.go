@@ -1,7 +1,6 @@
 package fdbased
 
 import (
-	"fmt"
 	"log"
 	"netstack/logger"
 	"netstack/tcpip"
@@ -123,13 +122,13 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable,
 	// 如果路由信息中有配置源MAC地址，那么使用该地址
 	// 如果没有，则使用本网卡的地址
 	if r.LocalLinkAddress != "" {
-		ethHdr.SrcAddr = r.LocalLinkAddress // 源网卡地址 说明这是一个转发报文
+		ethHdr.SrcAddr = r.LocalLinkAddress
 	} else {
-		ethHdr.SrcAddr = e.addr // 说明这是一个原始报文
+		ethHdr.SrcAddr = e.addr
 	}
 	eth.Encode(ethHdr) // 将以太帧信息作为报文头编入
 	logger.GetInstance().Info(logger.ETH, func() {
-		log.Println("链路层写回以太报文 ", r.LocalAddress, " to ", r.RemoteAddress)
+		log.Println(e.handleLocal, r.LocalLinkAddress, "链路层写回以太报文 ", r.LocalAddress, " to ", r.RemoteAddress)
 	})
 	// 写入网卡中
 	if payload.Size() == 0 {
