@@ -91,6 +91,7 @@ func (n *NIC) isPromiscuousMode() bool {
 // 相当于给网卡添加ip地址
 func (n *NIC) addAddressLocked(protocol tcpip.NetworkProtocolNumber, addr tcpip.Address,
 	peb PrimaryEndpointBehavior, replace bool) (*referencedNetworkEndpoint, *tcpip.Error) {
+	// 检查网卡绑定的协议栈是否注册过该网络协议
 	netProto, ok := n.stack.networkProtocols[protocol]
 	if !ok {
 		return nil, tcpip.ErrUnknownProtocol
@@ -112,15 +113,20 @@ func (n *NIC) addAddressLocked(protocol tcpip.NetworkProtocolNumber, addr tcpip.
 		n.removeEndpointLocked(ref) // 这里被调用的时候已经上过锁了 NOTE
 	}
 
+	// 新建一个网络端点的引用 为什么是一个引用
+	// 这是为了复用 所有使用该IP地址的传输层报文都可以复用它
 	ref := &referencedNetworkEndpoint{
-		refs:           1,
-		ep:             ep,
-		nic:            n,
-		protocol:       protocol,
-		holdsInsertRef: true,
+		refs:           1, // 初始的引用计数
+		ep:             ep, // 引用的网络端点
+		nic:            n, // 网络端点所在的网卡
+		protocol:       protocol, // 网络协议
+		holdsInsertRef: true, // 防止空引用
 	}
 
-	// Set up cache if link address resolution exists for this protocol.
+	// 如果该网卡驱动 配置了允许地址解析
+	// 我们让网卡绑定的协议栈来作为该网络端点的MAC解析缓存器
+	// 这样当我们向目标地址发送ip报文的时候 会检查缓存里是否存在 ip:mac 的对应关系
+	// 如果不存在 就会调用arp协议发广播来定位这个ip对应的设备
 	if n.linkEP.Capabilities()&CapabilityResolutionRequired != 0 {
 		if _, ok := n.stack.linkAddrResolvers[protocol]; ok {
 			ref.linkCache = n.stack
@@ -134,12 +140,17 @@ func (n *NIC) addAddressLocked(protocol tcpip.NetworkProtocolNumber, addr tcpip.
 		log.Printf("基于[%d]协议 为 #%d 网卡 添加网络层实现 并绑定地址到: %s\n", netProto.Number(), n.id, ep.ID().LocalAddress)
 	})
 
+	/*
+	   [tcp]->192.168.1.1->192.168.1.2->172.10.1.1->...
+	   [udp]->10.10.1.1->192.168.1.1->...
+	  **/
 	l, ok := n.primary[protocol]
 	if !ok {
 		l = &ilist.List{}
 		n.primary[protocol] = l
 	}
 
+	// 保存该ip的引用
 	switch peb {
 	case CanBePrimaryEndpoint:
 		l.PushBack(ref) // 目前走这一支

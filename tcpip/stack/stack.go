@@ -298,13 +298,21 @@ func New(network []string, transport []string, opts Options) *Stack {
 	}
 
 	s := &Stack{
+		// 用来保存各种传输层协议
 		transportProtocols: make(map[tcpip.TransportProtocolNumber]*transportProtocolState),
+		// 用来保存各种网络层协议
 		networkProtocols:   make(map[tcpip.NetworkProtocolNumber]NetworkProtocol),
+		// 用来保存各种地址解析协议
 		linkAddrResolvers:  make(map[tcpip.NetworkProtocolNumber]LinkAddressResolver),
+		// 用来保存所有使用该协议栈的网卡实例
 		nics:               make(map[tcpip.NICID]*NIC),
+		// 链路层MAC缓存器
 		linkAddrCache:      newLinkAddrCache(ageLimit, resolutionTimeout, resolutionAttempts),
+		// 端口管理器
 		PortManager:        ports.NewPortManager(),
+		// 协议栈时钟
 		clock:              clock,
+		// 协议栈状态管理器
 		stats:              opts.Stats.FillIn(),
 	}
 
@@ -474,8 +482,9 @@ func (s *Stack) CreateNamedNIC(id tcpip.NICID, name string, linkEP tcpip.LinkEnd
 	return s.createNIC(id, name, linkEP, true)
 }
 
-// 新建一个网卡对象，并且激活它 激活就是准备好熊网卡中读取和写入数据
+// 新建一个网卡对象，并且激活它 激活就是准备好从网卡中读取和写入数据
 func (s *Stack) createNIC(id tcpip.NICID, name string, linkEP tcpip.LinkEndpointID, enable bool) *tcpip.Error {
+	// 从全局寻找该链路层设备是否注册过
 	ep := FindLinkEndpoint(linkEP)
 	if ep == nil {
 		return tcpip.ErrBadLinkEndpoint
@@ -488,8 +497,10 @@ func (s *Stack) createNIC(id tcpip.NICID, name string, linkEP tcpip.LinkEndpoint
 	if _, ok := s.nics[id]; ok {
 		return tcpip.ErrDuplicateNICID
 	}
+	// 新建网卡对象 包括 网卡归属的协议栈 网卡号 网卡名 网卡驱动
 	n := newNIC(s, id, name, ep)
 
+	// 给协议栈注册这个网卡设备
 	s.nics[id] = n
 	if enable {
 		n.attachLinkEndpoint()
@@ -586,9 +597,9 @@ func (s *Stack) FindRoute(id tcpip.NICID, localAddr, remoteAddr tcpip.Address,
 		}
 
 		var ref *referencedNetworkEndpoint
-		if len(localAddr) != 0 {
+		if len(localAddr) != 0 { // 要是指定了本地ip
 			ref = nic.findEndpoint(netProto, localAddr, CanBePrimaryEndpoint) // 找到绑定LocalAddr的IP端
-		} else {
+		} else { // 要是没指定本地ip 从当前网卡绑定的所有ip里找个能用的
 			ref = nic.primaryEndpoint(netProto)
 		}
 		if ref == nil {
@@ -606,7 +617,6 @@ func (s *Stack) FindRoute(id tcpip.NICID, localAddr, remoteAddr tcpip.Address,
 		logger.GetInstance().Info(logger.IP, func() {
 			log.Println(r.LocalLinkAddress, r.LocalAddress, r.RemoteLinkAddress, r.RemoteAddress, r.NextHop)
 		})
-		log.Println(s.routeTable[i])
 		return r, nil
 	}
 

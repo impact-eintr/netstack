@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"netstack/logger"
 	"netstack/tcpip"
 	"netstack/tcpip/stack"
 	"netstack/tcpip/transport/tcp"

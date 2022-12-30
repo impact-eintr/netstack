@@ -19,6 +19,8 @@ type transportEndpoints struct {
 
 // transportDemuxer 解复用战队传输端点的数据包
 // 他执行两级解复用：首先基于网络层和传输协议 然后基于端点ID
+// 在我们注册完各种网络层、传输层协议后，我们还需要一个分流器让各种数据准确地找到自己的处理端，不能让一个ipv4的tcp连接最终被一个ipv6的udp处理端解析。
+// 那么对于任意一个传输层数据流，它应当唯一标识为 `网络层协议-传输层协议-目标IP-目标端口-本地IP-本地端口`的一个六元组
 type transportDemuxer struct {
 	protocol map[protocolIDs]*transportEndpoints
 }

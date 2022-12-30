@@ -97,11 +97,11 @@ func main() {
 
 	// 抽象的文件接口
 	linkID := fdbased.New(&fdbased.Options{
-		FD:                 fd,
-		MTU:                1500,
-		Address:            tcpip.LinkAddress(maddr),
-		ResolutionRequired: true,
-		HandleLocal: true,
+		FD:                 fd, // tap网卡的FD
+		MTU:                1500, // 1500 以太网单个帧最大值
+		Address:            tcpip.LinkAddress(maddr), // 抽象网卡的MAC
+		ResolutionRequired: true, // 允许开启地址解析
+		HandleLocal: true, // 允许本地环回
 	})
 
 	linkID2 := fdbased.New(&fdbased.Options{
