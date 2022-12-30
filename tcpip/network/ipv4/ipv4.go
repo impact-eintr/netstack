@@ -114,8 +114,6 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable, payload b
 		logger.GetInstance().Info(logger.IP, func() {
 			if payload.Size() == 0 {
 				log.Printf("发送 IP 报文 %d bytes", hdr.UsedLength()+payload.Size())
-			} else {
-				log.Println(header.IPv4(append(ip, payload.ToView()...)))
 			}
 		})
 	}

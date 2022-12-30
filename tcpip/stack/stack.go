@@ -580,11 +580,13 @@ func (s *Stack) RemoveAddress(id tcpip.NICID, addr tcpip.Address) *tcpip.Error {
 }
 
 // FindRoute 路由查找实现，比如当tcp建立连接时，会用该函数得到路由信息
+// 注意仅仅包含 SrcMAC SrcIp DstIp 没有 DstMAC
 func (s *Stack) FindRoute(id tcpip.NICID, localAddr, remoteAddr tcpip.Address,
 	netProto tcpip.NetworkProtocolNumber) (Route, *tcpip.Error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	// 遍历协议栈的路由表
 	for i := range s.routeTable {
 		if (id != 0 && id != s.routeTable[i].NIC) || // 检查是否是对应的网卡
 			(len(remoteAddr) != 0 && !s.routeTable[i].Match(remoteAddr)) {
@@ -609,9 +611,10 @@ func (s *Stack) FindRoute(id tcpip.NICID, localAddr, remoteAddr tcpip.Address,
 		if len(remoteAddr) == 0 {
 			// If no remote address was provided, then the route
 			// provided will refer to the link local address.
-			remoteAddr = ref.ep.ID().LocalAddress // 发回自己? TODO
+			remoteAddr = ref.ep.ID().LocalAddress // 本地环回
 		}
 
+		// 构建一个路由 包括 目标ip 目标mac 本地ip 本地mac
 		r := makeRoute(netProto, ref.ep.ID().LocalAddress, remoteAddr, nic.linkEP.LinkAddress(), ref)
 		r.NextHop = s.routeTable[i].Gateway
 		logger.GetInstance().Info(logger.IP, func() {

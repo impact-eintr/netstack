@@ -75,9 +75,7 @@ func (r *Route) Capabilities() LinkEndpointCapabilities {
 // 如果需要地址解析，则返回ErrNoLinkAddress和通知通道，以阻止顶级调用者。
 // 地址解析完成后，通道关闭（不管成功与否）。
 func (r *Route) Resolve(waker *sleep.Waker) (<-chan struct{}, *tcpip.Error) {
-	if !r.IsResolutionRequired() {
-		// Nothing to do if there is no cache (which does the resolution on cache miss) or
-		// link address is already known.
+	if !r.IsResolutionRequired() { // 没有配置地址解析
 		return nil, nil
 	}
 
@@ -109,9 +107,7 @@ func (r *Route) RemoveWaker(waker *sleep.Waker) {
 	r.ref.linkCache.RemoveWaker(r.ref.nic.ID(), nextAddr, waker)
 }
 
-// IsResolutionRequired returns true if Resolve() must be called to resolve
-// the link address before the this route can be written to.
-// 本地缓存有东西 而且不知道远端的MAC
+// 检查是否允许了地址解析 首先检查是否配置了mac缓存 然后检查目标mac是否已经存在
 func (r *Route) IsResolutionRequired() bool {
 	return r.ref.linkCache != nil && r.RemoteLinkAddress == ""
 }
@@ -119,6 +115,7 @@ func (r *Route) IsResolutionRequired() bool {
 // WritePacket writes the packet through the given route.
 func (r *Route) WritePacket(hdr buffer.Prependable, payload buffer.VectorisedView,
 	protocol tcpip.TransportProtocolNumber, ttl uint8) *tcpip.Error {
+	// 路由对应的IP的WritePacket
 	err := r.ref.ep.WritePacket(r, hdr, payload, protocol, ttl)
 	if err == tcpip.ErrNoRoute {
 		r.Stats().IP.OutgoingPacketErrors.Increment()

@@ -34,7 +34,7 @@ func main() {
 		log.Fatal("Usage: ", os.Args[0], " <tap-device> <local-address/mask> <ip-address> <local-port>")
 	}
 
-	logger.SetFlags(logger.ETH|logger.IP)
+	logger.SetFlags(logger.IP)
 	log.SetFlags(log.Lshortfile | log.LstdFlags)
 
 	tapName := flag.Arg(0)
@@ -190,15 +190,27 @@ func main() {
 
 		log.Printf("客户端 建立连接\n\n客户端 写入数据\n")
 
-		for i := 0; i < 3; i++ {
-			conn.Write([]byte("Hello Netstack"))
+		cnt := 0
+		size := 1 << 10
+		for i := 0; i < 1; i++ {
+			//conn.Write([]byte("Hello Netstack"))
+			conn.Write(make([]byte, size))
 			buf := make([]byte, 1024)
-			n, err := conn.Read(buf)
-			if err != nil {
-				log.Println(err)
-				return
+
+			for {
+				n, err := conn.Read(buf)
+				if err != nil {
+					log.Println(err)
+					return
+				}
+				cnt+=n
+				logger.NOTICE("客户端读取", string(buf[:]))
+				log.Println(cnt)
+				if cnt == size {
+					logger.NOTICE("退出")
+					break
+				}
 			}
-			logger.NOTICE("客户端读取", string(buf[:n]))
 		}
 
 		conn.Close()
@@ -230,7 +242,8 @@ func TestServerEcho(conn *TcpConn) {
 			log.Println(err)
 			break
 		}
-		logger.NOTICE("服务端读取数据", string(buf[:n]))
+		_ = n
+		logger.NOTICE("服务端读取数据", string(buf[:]))
 		conn.Write(buf)
 	}
 

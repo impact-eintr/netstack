@@ -129,7 +129,7 @@ func (n *NIC) addAddressLocked(protocol tcpip.NetworkProtocolNumber, addr tcpip.
 	// 如果不存在 就会调用arp协议发广播来定位这个ip对应的设备
 	if n.linkEP.Capabilities()&CapabilityResolutionRequired != 0 {
 		if _, ok := n.stack.linkAddrResolvers[protocol]; ok {
-			ref.linkCache = n.stack
+			ref.linkCache = n.stack // 对于loopback驱动而言 他的缓存就是nil 不开启
 		}
 	}
 

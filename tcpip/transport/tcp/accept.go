@@ -377,7 +377,6 @@ func (e *endpoint) protocolListenLoop(rcvWnd seqnum.Size) *tcpip.Error {
 				e.newSegmentWaker.Assert() // 重新尝试获取数据
 			}
 		case wakerForNotification:
-			// TODO 触发其他事件
 			n := e.fetchNotifications()
 			if n&notifyClose != 0 {
 				return nil
