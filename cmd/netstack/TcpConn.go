@@ -16,7 +16,8 @@ import (
 // Dial 呼叫tcp服务端
 func Dial(s *stack.Stack, proto tcpip.NetworkProtocolNumber, addr tcpip.Address, port int) (*TcpConn, error) {
 	remote := tcpip.FullAddress{
-		Addr: addr,
+		NIC: 1, // 用 eth1 发送数据 自动绑定了 192.168.1.1
+		Addr: addr, // 192.168.1.1
 		Port: uint16(port),
 	}
 	var wq waiter.Queue
@@ -88,7 +89,6 @@ func (conn *TcpConn) Write(snd []byte) error {
 		n, _, err := conn.ep.Write(tcpip.SlicePayload(snd), tcpip.WriteOptions{To: &conn.raddr})
 		if err != nil {
 			if err == tcpip.ErrWouldBlock {
-				logger.NOTICE("阻塞力!!!!!!!!!!!!!!!!!")
 				<-conn.notifyCh
 				if int(n) < len(snd) && n > 0 {
 					snd = snd[n:]

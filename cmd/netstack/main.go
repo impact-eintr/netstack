@@ -26,13 +26,15 @@ import (
 
 var mac = flag.String("mac", "aa:00:01:01:01:01", "mac address to use in tap device")
 
+var mac2 = flag.String("mac2", "bb:00:01:01:01:01", "mac address to use in tap2 device")
+
 func main() {
 	flag.Parse()
 	if len(flag.Args()) != 4 {
 		log.Fatal("Usage: ", os.Args[0], " <tap-device> <local-address/mask> <ip-address> <local-port>")
 	}
 
-	logger.SetFlags(logger.ETH)
+	logger.SetFlags(logger.ETH|logger.IP)
 	log.SetFlags(log.Lshortfile | log.LstdFlags)
 
 	tapName := flag.Arg(0)
@@ -43,6 +45,11 @@ func main() {
 	log.Printf("tap: %v, addr: %v, port: %v", tapName, addrName, portName)
 
 	maddr, err := net.ParseMAC(*mac)
+	if err != nil {
+		log.Fatalf("Bad MAC address: %v", *mac)
+	}
+
+	maddr2, err := net.ParseMAC(*mac2)
 	if err != nil {
 		log.Fatalf("Bad MAC address: %v", *mac)
 	}
@@ -97,12 +104,24 @@ func main() {
 		HandleLocal: true,
 	})
 
+	linkID2 := fdbased.New(&fdbased.Options{
+		FD:                 fd,
+		MTU:                1500,
+		Address:            tcpip.LinkAddress(maddr2),
+		ResolutionRequired: true,
+		HandleLocal: true,
+	})
+
 	// 新建相关协议的协议栈
 	s := stack.New([]string{ipv4.ProtocolName, arp.ProtocolName},
 		[]string{tcp.ProtocolName, udp.ProtocolName}, stack.Options{})
 
 	// 新建抽象的网卡
-	if err := s.CreateNamedNIC(1, "eth0", linkID); err != nil {
+	if err := s.CreateNamedNIC(1, "eth1", linkID); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := s.CreateNamedNIC(2, "eth2", linkID2); err != nil {
 		log.Fatal(err)
 	}
 
@@ -111,8 +130,15 @@ func main() {
 		log.Fatal(err)
 	}
 
+	if err := s.AddAddress(2, proto, "192.168.1.2"); err != nil {
+		log.Fatal(err)
+	}
+
 	// 在该协议栈上添加和注册ARP协议
 	if err := s.AddAddress(1, arp.ProtocolNumber, arp.ProtocolAddress); err != nil {
+		log.Fatal(err)
+	}
+	if err := s.AddAddress(2, arp.ProtocolNumber, arp.ProtocolAddress); err != nil {
 		log.Fatal(err)
 	}
 
@@ -123,6 +149,12 @@ func main() {
 			Mask:        tcpip.AddressMask(strings.Repeat("\x00", len(addr))),
 			Gateway:     "",
 			NIC:         1,
+		},
+		{
+			Destination: tcpip.Address(strings.Repeat("\x00", len(addr))),
+			Mask:        tcpip.AddressMask(strings.Repeat("\x00", len(addr))),
+			Gateway:     "",
+			NIC:         2,
 		},
 	})
 

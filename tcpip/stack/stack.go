@@ -606,6 +606,7 @@ func (s *Stack) FindRoute(id tcpip.NICID, localAddr, remoteAddr tcpip.Address,
 		logger.GetInstance().Info(logger.IP, func() {
 			log.Println(r.LocalLinkAddress, r.LocalAddress, r.RemoteLinkAddress, r.RemoteAddress, r.NextHop)
 		})
+		log.Println(s.routeTable[i])
 		return r, nil
 	}
 

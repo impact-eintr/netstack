@@ -128,7 +128,7 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable,
 	}
 	eth.Encode(ethHdr) // 将以太帧信息作为报文头编入
 	logger.GetInstance().Info(logger.ETH, func() {
-		log.Println(e.handleLocal, r.LocalLinkAddress, "链路层写回以太报文 ", r.LocalAddress, " to ", r.RemoteAddress)
+		log.Println(ethHdr.SrcAddr, "链路层写回以太报文 ", r.RemoteLinkAddress, " to ", r.RemoteAddress)
 	})
 	// 写入网卡中
 	if payload.Size() == 0 {

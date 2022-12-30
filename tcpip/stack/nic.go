@@ -101,9 +101,6 @@ func (n *NIC) addAddressLocked(protocol tcpip.NetworkProtocolNumber, addr tcpip.
 	if err != nil {
 		return nil, err
 	}
-	logger.GetInstance().Info(logger.IP, func() {
-		log.Printf("基于[%d]协议 为 #%d 网卡 添加网络层实现 并绑定地址到: %s\n", netProto.Number(), n.id, ep.ID().LocalAddress)
-	})
 
 	// 获取网络层端的id 其实就是ip地址
 	id := *ep.ID()
@@ -132,6 +129,10 @@ func (n *NIC) addAddressLocked(protocol tcpip.NetworkProtocolNumber, addr tcpip.
 
 	// 注册该网络端
 	n.endpoints[id] = ref
+
+	logger.GetInstance().Info(logger.IP, func() {
+		log.Printf("基于[%d]协议 为 #%d 网卡 添加网络层实现 并绑定地址到: %s\n", netProto.Number(), n.id, ep.ID().LocalAddress)
+	})
 
 	l, ok := n.primary[protocol]
 	if !ok {
