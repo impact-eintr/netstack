@@ -616,7 +616,7 @@ func (s *Stack) FindRoute(id tcpip.NICID, localAddr, remoteAddr tcpip.Address,
 
 		// 构建一个路由 包括 目标ip 目标mac 本地ip 本地mac
 		r := makeRoute(netProto, ref.ep.ID().LocalAddress, remoteAddr, nic.linkEP.LinkAddress(), ref)
-		r.NextHop = s.routeTable[i].Gateway
+		r.NextHop = s.routeTable[i].Gateway // 路由器地址
 		logger.GetInstance().Info(logger.IP, func() {
 			log.Println(r.LocalLinkAddress, r.LocalAddress, r.RemoteLinkAddress, r.RemoteAddress, r.NextHop)
 		})

@@ -116,6 +116,7 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable,
 	}
 	// 封装增加以太网头部
 	eth := header.Ethernet(hdr.Prepend(header.EthernetMinimumSize)) // 分配14B的内存
+	log.Println(eth,hdr,  hdr.Prepend(header.EthernetMinimumSize))
 	ethHdr := &header.EthernetFields{                               // 配置以太帧信息
 		DstAddr: r.RemoteLinkAddress,
 		Type:    protocol,

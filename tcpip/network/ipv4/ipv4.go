@@ -108,15 +108,6 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable, payload b
 	r.Stats().IP.PacketsSent.Increment()
 
 	// 写入网卡接口
-	if protocol == header.ICMPv4ProtocolNumber {
-		log.Println("IP 写回ICMP报文", header.IPv4(append(ip, payload.ToView()...)))
-	} else {
-		logger.GetInstance().Info(logger.IP, func() {
-			if payload.Size() == 0 {
-				log.Printf("发送 IP 报文 %d bytes", hdr.UsedLength()+payload.Size())
-			}
-		})
-	}
 	return e.linkEP.WritePacket(r, hdr, payload, ProtocolNumber)
 }
 

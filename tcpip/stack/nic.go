@@ -339,20 +339,24 @@ func (n *NIC) RemoveAddress(addr tcpip.Address) *tcpip.Error {
 // 当前实现的网络层协议有 arp、ipv4 和 ipv6。
 func (n *NIC) DeliverNetworkPacket(linkEP LinkEndpoint, remoteLinkAddr, localLinkAddr tcpip.LinkAddress,
 	protocol tcpip.NetworkProtocolNumber, vv buffer.VectorisedView) {
+	// 检查本协议栈是否注册过该网络协议
 	netProto, ok := n.stack.networkProtocols[protocol]
 	if !ok {
 		n.stack.stats.UnknownProtocolRcvdPackets.Increment()
 		return
 	}
 
+	// 网络层协议状态统计
 	if netProto.Number() == header.IPv4ProtocolNumber || netProto.Number() == header.IPv6ProtocolNumber {
 		n.stack.stats.IP.PacketsReceived.Increment()
 	}
 
+	// 报文内容过小 判断为受损报文 丢弃
 	if len(vv.First()) < netProto.MinimumPacketSize() {
 		n.stack.stats.MalformedRcvdPackets.Increment()
 		return
 	}
+	// 解析源 IP 和目标IP
 	src, dst := netProto.ParseAddresses(vv.First())
 	logger.GetInstance().Info(logger.ETH, func() {
 		log.Printf("网卡[%v]准备从 [%s] 向 [%s] 分发数据: %v\n", linkEP.LinkAddress(), src, dst, func() []byte {
@@ -362,22 +366,26 @@ func (n *NIC) DeliverNetworkPacket(linkEP LinkEndpoint, remoteLinkAddr, localLin
 			return vv.ToView()
 		}())
 	})
-	// 根据网络协议和数据包的目的地址，找到网络端
-	// 然后将数据包分发给网络层
+	// 根据网络协议和数据包的目的地址，找到绑定该目标地址的网络端
 	if ref := n.getRef(protocol, dst); ref != nil {
+		// 路由 源 与 目标 反转
 		r := makeRoute(protocol, dst, src, linkEP.LinkAddress(), ref)
 		r.RemoteLinkAddress = remoteLinkAddr
 		logger.GetInstance().Info(logger.ETH, func() {
 			log.Println("准备前往 IP 将本地和远端的MAC、IP 保存在路由中 以便协议栈使用",
 				r.LocalLinkAddress, r.RemoteLinkAddress, r.LocalAddress, r.RemoteAddress)
 		})
+		// 将数据包分发给网络层
 		ref.ep.HandlePacket(&r, vv)
 		ref.decRef()
 		return
 	}
 
+	// 如果配置了允许转发 什么意思呢
+	// 就是说当前网卡并没有找到目标IP 我们来试试本机的其他网卡
+	// 其他网卡-其他网卡上的一个可用地址-目标地址
 	if n.stack.Forwarding() {
-		r, err := n.stack.FindRoute(0, "", dst, protocol)
+		r, err := n.stack.FindRoute(0, dst, src, protocol) // FIXME 将dst和src调转?
 		if err != nil {
 			n.stack.stats.IP.InvalidAddressesReceived.Increment()
 			return
@@ -390,10 +398,12 @@ func (n *NIC) DeliverNetworkPacket(linkEP LinkEndpoint, remoteLinkAddr, localLin
 		// Found a NIC.
 		n := r.ref.nic
 		n.mu.RLock()
-		ref, ok := n.endpoints[NetworkEndpointID{dst}]
+		ref, ok := n.endpoints[NetworkEndpointID{dst}] // 检查这张网卡是否绑定了目标IP
 		n.mu.RUnlock()
+
 		if ok && ref.tryIncRef() {
 			ref.ep.HandlePacket(&r, vv)
+			logger.NOTICE("转发数据")
 			ref.decRef()
 		} else {
 			// n doesn't have a destination endpoint.

@@ -34,7 +34,7 @@ func main() {
 		log.Fatal("Usage: ", os.Args[0], " <tap-device> <local-address/mask> <ip-address> <local-port>")
 	}
 
-	logger.SetFlags(logger.IP)
+	//logger.SetFlags(logger.IP)
 	log.SetFlags(log.Lshortfile | log.LstdFlags)
 
 	tapName := flag.Arg(0)
@@ -130,7 +130,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if err := s.AddAddress(2, proto, "192.168.1.2"); err != nil {
+	addr2 := tcpip.Address(net.ParseIP("192.168.1.20").To4())
+	if err := s.AddAddress(2, proto, addr2); err != nil {
 		log.Fatal(err)
 	}
 
@@ -147,7 +148,7 @@ func main() {
 		{
 			Destination: tcpip.Address(strings.Repeat("\x00", len(addr))),
 			Mask:        tcpip.AddressMask(strings.Repeat("\x00", len(addr))),
-			Gateway:     "",
+			Gateway:     "", // 路由器
 			NIC:         1,
 		},
 		{
@@ -157,6 +158,8 @@ func main() {
 			NIC:         2,
 		},
 	})
+
+	s.SetForwarding(true)
 
 	done := make(chan struct{}, 2)
 
@@ -190,27 +193,10 @@ func main() {
 
 		log.Printf("客户端 建立连接\n\n客户端 写入数据\n")
 
-		cnt := 0
-		size := 1 << 10
-		for i := 0; i < 1; i++ {
+		size := 1 << 11
+		for i := 0; i < 100; i++ {
 			//conn.Write([]byte("Hello Netstack"))
 			conn.Write(make([]byte, size))
-			buf := make([]byte, 1024)
-
-			for {
-				n, err := conn.Read(buf)
-				if err != nil {
-					log.Println(err)
-					return
-				}
-				cnt+=n
-				logger.NOTICE("客户端读取", string(buf[:]))
-				log.Println(cnt)
-				if cnt == size {
-					logger.NOTICE("退出")
-					break
-				}
-			}
 		}
 
 		conn.Close()
@@ -244,7 +230,6 @@ func TestServerEcho(conn *TcpConn) {
 		}
 		_ = n
 		logger.NOTICE("服务端读取数据", string(buf[:]))
-		conn.Write(buf)
 	}
 
 	conn.ep.Close()

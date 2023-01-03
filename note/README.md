@@ -283,7 +283,13 @@ func (n *NIC) attachLinkEndpoint() {
 在上面的函数中，我们开启了网卡的数据读取机制，对于fdbased这个驱动而言，他的实现设这样的
 
 ``` go
+
+// Attach 启动从文件描述符中读取数据包的goroutine,并通过提供的分发函数来分发数据报
+func (e *endpoint) Attach(dispatcher stack.NetworkDispatcher) {
+	e.dispatcher = dispatcher  // 将这张网卡注册为该链路的网络分发器
+	// 链接端点不可靠。保存传输端点后，它们将停止发送传出数据包，并拒绝所有传入数据包。
 	go e.dispatchLoop()
+}
     
 // 循环地从fd中读取数据 然后将数据报分发给协议栈
 func (e *endpoint) dispatchLoop() *tcpip.Error {
@@ -778,5 +784,69 @@ func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable, payload b
 
 ```
 
+在前面我们提到过链路层设备拥有读写两个接口，在激活设备的时候我们执行了读取函数，现在，我们该使用写入函数了(以fdbased为例)。
 
+``` go
+// 将上层的报文经过链路层封装，写入网卡中，如果写入失败则丢弃该报文
+func (e *endpoint) WritePacket(r *stack.Route, hdr buffer.Prependable,
+	payload buffer.VectorisedView, protocol tcpip.NetworkProtocolNumber) *tcpip.Error {
+	// 如果目标地址是设备自己 那么将报文重新返回给协议栈 也就是环回
+	if e.handleLocal && r.LocalAddress != "" && r.LocalAddress == r.RemoteAddress {
+		views := make([]buffer.View, 1, 1+len(payload.Views()))
+		views[0] = hdr.View()
+		views = append(views, payload.Views()...)
+		vv := buffer.NewVectorisedView(len(views[0])+payload.Size(), views) // 添加报文头
+		e.dispatcher.DeliverNetworkPacket(e, r.RemoteLinkAddress, r.LocalLinkAddress,
+			protocol, vv) // 分发数据报
+		return nil
+	}
+	
+	// 非本地环回数据
+	// 封装增加以太网头部
+	eth := header.Ethernet(hdr.Prepend(header.EthernetMinimumSize)) // 分配14B的内存
+	ethHdr := &header.EthernetFields{                               // 配置以太帧信息
+		DstAddr: r.RemoteLinkAddress,
+		Type:    protocol,
+	}
+	// 如果路由信息中有配置源MAC地址，那么使用该地址
+	// 如果没有，则使用本网卡的地址
+	if r.LocalLinkAddress != "" {
+		ethHdr.SrcAddr = r.LocalLinkAddress
+	} else {
+		ethHdr.SrcAddr = e.addr
+	}
+	eth.Encode(ethHdr) // 将以太帧信息作为报文头编入
+	logger.GetInstance().Info(logger.ETH, func() {
+		log.Println(ethHdr.SrcAddr, "链路层写回以太报文 ", r.RemoteLinkAddress, " to ", r.RemoteAddress)
+	})
+	// 写入网卡中
+	if payload.Size() == 0 {
+		return rawfile.NonBlockingWrite(e.fd, hdr.View())
+	}
+	return rawfile.NonBlockingWrite2(e.fd, hdr.View(), payload.ToView())
+}
+
+```
+
+我们现在来捋一下，除了传输层以外的数据传输机制：
+
+首先，数据发送方将数据从应用层复制数据到传输层，在封装传输层数据之前，我们会先解析路由。
+
+路由: 网卡-网络协议-本地IP-本地MAC-目标IP-目标MAC
+
+先查找路由表，查看路由表中是否有目标网卡，如果有，检查指定IP该网卡是否绑定过，如果没有指定IP,就从网卡绑定的IP里找一个能用的，然后本地MAC就使用这个网卡的MAC。目标IP是数据发送方提供的，目标MAC通过查询arp缓存或者发送arp广播获取。
+
+有了路由信息，我们就可以执行网络层和链路层的工作了。从路由信息中获取IP的处理端点，封装IP报文，封装以太报文，写入网卡，网卡将这些数据发送出去。
+
+目标主机网卡接受到数据时，dispatchLoop中的阻塞读不再阻塞，读取数据。解析以太报文，获取远端IP和远端MAC，在上面我们新建网卡的时候，我们已经将这张网卡作为本链路的网络分发器，所以调用网卡的分发函数。
+
+``` go
+
+	case header.ARPProtocolNumber, header.IPv4ProtocolNumber:
+		e.dispatcher.DeliverNetworkPacket(e, remoteLinkAddr, localLinkAddr, p, vv)
+```
+
+``` go
+
+```
 
