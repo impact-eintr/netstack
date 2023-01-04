@@ -193,8 +193,8 @@ func main() {
 
 		log.Printf("客户端 建立连接\n\n客户端 写入数据\n")
 
-		size := 1 << 11
-		for i := 0; i < 100; i++ {
+		size := 1 << 10
+		for i := 0; i < 3; i++ {
 			//conn.Write([]byte("Hello Netstack"))
 			conn.Write(make([]byte, size))
 		}

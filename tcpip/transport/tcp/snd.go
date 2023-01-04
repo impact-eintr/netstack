@@ -525,7 +525,7 @@ func (s *sender) retransmitTimerExpired() bool {
 
 // 发送数据段，最终调用 sendSegment 来发送
 func (s *sender) sendData() {
-	limit := s.maxPayloadSize //最开始是65483
+	limit := s.maxPayloadSize
 
 	// 如果TCP在超过重新传输超时的时间间隔内没有发送数据，TCP应该在开始传输之前将cwnd设置为不超过RW。
 	if !s.fr.active && time.Now().Sub(s.lastSendTime) > s.rto {
@@ -539,7 +539,9 @@ func (s *sender) sendData() {
 	var dataSent bool
 	// 遍历发送链表，发送数据
 	// tcp拥塞控制：s.outstanding < s.sndCwnd 判断正在发送的数据量不能超过拥塞窗口。
-	for seg = s.writeNext; seg != nil && s.outstanding < s.sndCwnd; seg = seg.Next() { // 首次发送不会超过两个包
+	for seg = s.writeNext;
+	seg != nil && s.outstanding < s.sndCwnd;
+	seg = seg.Next() {
 		// 如果seg的flags是0，将flags改为psh|ack
 		if seg.flags == 0 {
 			seg.sequenceNumber = s.sndNxt
@@ -560,8 +562,7 @@ func (s *sender) sendData() {
 			if seg.flags&flagFin != 0 {
 				panic("Netstack queues FIN segments without data.")
 			}
-			if !seg.sequenceNumber.LessThan(end) {
-				log.Println("暂停数据发送 等待确认标号", seg.sequenceNumber, " 已收到 。。。。")
+			if !seg.sequenceNumber.LessThan(end) { // 超过了发送窗口限制
 				break
 			}
 
@@ -573,6 +574,8 @@ func (s *sender) sendData() {
 
 			// 如果seg的payload字节数大于available
 			// 将seg进行分段，并且插入到该seg的后面
+			// ...->[seg3->seg2->seg1]->[seg3->seg2->seg1(2048)]
+			// ...->[seg3->seg2->seg1]->[seg4->seg3->seg2(1024)->seg1(1024)]
 			if seg.data.Size() > available {
 				nSeg := seg.clone()
 				nSeg.data.TrimFront(available) // NOTE 删掉用过的
@@ -599,8 +602,10 @@ func (s *sender) sendData() {
 		// 发送包 开始计算RTT
 		s.sendSegment(seg.data, seg.flags, seg.sequenceNumber)
 		// 发送一个数据段后，更新sndNxt
+		//                              旧的 sndNxt V
+		// ...->[seg3->seg2->seg1]->[seg3->seg2->seg1]
+		//                         新的 sndNxt^
 		if s.sndNxt.LessThan(segEnd) {
-			log.Println(s.ep.id.LocalPort, " 更新sndNxt", s.sndNxt, " 为 ", segEnd, "下一次发送的数据头为", segEnd)
 			s.sndNxt = segEnd
 		}
 	}

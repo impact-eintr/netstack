@@ -388,15 +388,15 @@ func (h *handshake) processSegments() *tcpip.Error {
 // execute executes the TCP 3-way handshake.
 // 执行tcp 3次握手，客户端和服务端都是调用该函数来实现三次握手
 /*
-			c	   flag  	s
-生成ISN1	|				|生成ISN2
-   sync_sent|------sync---->|sync_rcvd
-			|				|
-			|				|
- established|<--sync|ack----|
-			|				|
-			|				|
-			|------ack----->|established
+		      	 c	     flag    	s
+	生成ISN1	 |			        	| 生成ISN2
+	sync_sent  |------sync----->| sync_rcvd
+			       |				        |
+			       |			         	|
+ established |<---sync|ack----|
+			       |				        |
+			       |	        			|
+			       |------ack------>| established
 */
 func (h *handshake) execute() *tcpip.Error {
 	// 是否需要拿到下一条地址
@@ -663,7 +663,23 @@ func (e *endpoint) sendRaw(data buffer.VectorisedView, flags byte, seq, ack seqn
 	return err
 }
 
+
+
 // 从发送队列中取出数据并发送出去
+/*
+ep.sndQueue:  ...->seg3->seg2->seg1 =>
+
+当发送队列中有数据的时候 将这个队列压入写队列 队列的队列
+
+                                         writeNext
+                                             V
+ep.snd.writeList:...->seglist3->seglist2->seglist1 =>
+                      ^      ^  ^      ^  ^      ^
+                      |_s->s_|  |_s->s_|  |_s->s_|
+
+我们消费数据的时候找到写队列的队列头，然后遍历它
+
+ */
 func (e *endpoint) handleWrite() *tcpip.Error {
 	e.sndBufMu.Lock()
 

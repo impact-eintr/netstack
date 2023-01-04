@@ -425,9 +425,9 @@ func (e *endpoint) Write(p tcpip.Payload, opts tcpip.WriteOptions) (uintptr, <-c
 	l := len(v)
 	s := newSegmentFromView(&e.route, e.id, v) // 分段
 	// 插入发送队列
-	e.sndBufUsed += l
-	e.sndBufInQueue += seqnum.Size(l)
-	e.sndQueue.PushBack(s)
+	e.sndBufUsed += l // 发送队列中段+1
+	e.sndBufInQueue += seqnum.Size(l) // 发送队列长度+length
+	e.sndQueue.PushBack(s) // 将段压入发送队列
 
 	e.sndBufMu.Unlock()
 

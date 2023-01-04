@@ -280,7 +280,7 @@ func (e *endpoint) handleSynSegment(ctx *listenContext, s *segment, opts *header
 		return
 	}
 	// 到这里，三次握手已经完成，那么分发一个新的连接
-	e.deliverAccepted(n)
+	e.deliverAccepted(n) // 分发这个新连接到全连接队列
 }
 
 // handleListenSegment is called when a listening endpoint receives a segment
@@ -290,28 +290,51 @@ func (e *endpoint) handleListenSegment(ctx *listenContext, s *segment) {
 	case flagSyn: // syn报文处理
 		// 分析tcp选项
 		opts := parseSynSegmentOptions(s)
-		if incSynRcvdCount() {
+		if !incSynRcvdCount() {
 			s.incRef()
 			go e.handleSynSegment(ctx, s, &opts)
 		} else {
+			// 防止半连接池攻击 我们使用cookie
 			cookie := ctx.createCookie(s.id, s.sequenceNumber, encodeMSS(opts.MSS))
-			// Send SYN with window scaling because we currently
-			// dont't encode this information in the cookie.
-			//
-			// Enable Timestamp option if the original syn did have
-			// the timestamp option specified.
 			synOpts := header.TCPSynOptions{
-				WS:    -1,
+				WS:    -1, // 告知对方关闭窗口滑动
 				TS:    opts.TS,
 				TSVal: tcpTimeStamp(timeStampOffset()),
 				TSEcr: opts.TSVal,
 			}
-			// 返回 syn+ack 报文
+			// 返回 syn+ack 报文 ack+1 表明我们确认了这个syn报文 占用一个字节
 			sendSynTCP(&s.route, s.id, flagSyn|flagAck, cookie, s.sequenceNumber+1, ctx.rcvWnd, synOpts)
 		}
-	// 返回一个syn+ack报文
-	case flagFin: // fin报文处理
-		// 三次握手最后一次 ack 报文
+
+	case flagAck:
+		// NOTICE  对应处理后台协程过多的情况  三次握手最后一次 ack 报文
+		// 当我们的后台写协程不足以处理新的连接的时候
+		// 我们认为协议栈目前没有能力处理大规模数据
+		// 所以我们限制后面新成立的连接的窗口尺寸
+
+		// 验证cookie seq-1 和 ack-1 表明 还原两次握手增加的计数
+		if data, ok := ctx.isCookieValid(s.id, s.ackNumber-1,
+			s.sequenceNumber-1); ok && int(data) < len(mssTable) {
+			// Create newly accepted endpoint and deliver it.
+			rcvdSynOptions := &header.TCPSynOptions{
+				MSS: mssTable[data],
+				// 关闭我们的窗口滑动
+				WS: -1,
+			}
+			if s.parsedOptions.TS {
+				rcvdSynOptions.TS = true
+				rcvdSynOptions.TSVal = s.parsedOptions.TSVal
+				rcvdSynOptions.TSEcr = s.parsedOptions.TSEcr
+			}
+
+			// 三次握手已经完成，新建一个tcp连接
+			n, err := ctx.createConnectedEndpoint(s, s.ackNumber-1,
+				s.sequenceNumber-1, rcvdSynOptions)
+			if err == nil {
+				n.tsOffset = 0
+				e.deliverAccepted(n) // 分发这个新连接到全连接队列
+			}
+		}
 	}
 }
 

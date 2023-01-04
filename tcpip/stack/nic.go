@@ -488,9 +488,11 @@ func (n *NIC) DeliverTransportPacket(r *Route, protocol tcpip.TransportProtocolN
 	})
 	id := TransportEndpointID{dstPort, r.LocalAddress, srcPort, r.RemoteAddress}
 	// 调用分流器，根据传输层协议和传输层id分发数据报文
+	// 现在本网卡中尝试分发
 	if n.demux.deliverPacket(r, protocol, vv, id) {
 		return
 	}
+	// 在整个协议栈尝试分发
 	if n.stack.demux.deliverPacket(r, protocol, vv, id) {
 		return
 	}

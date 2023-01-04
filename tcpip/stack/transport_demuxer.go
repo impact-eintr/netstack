@@ -126,6 +126,8 @@ func (d *transportDemuxer) findEndpointLocked(eps *transportEndpoints,
 	}
 
 	// Try to find a match with the id minus the remote part.
+	// listener 的情况 本地没有这个 dstIP+dstPort:srcIP+srcPort 的连接交由
+	// ""+0:srcIP+srcPort的Listener来处理
 	nid.LocalAddress = id.LocalAddress
 	nid.RemoteAddress = ""
 	nid.RemotePort = 0
