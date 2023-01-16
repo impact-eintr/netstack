@@ -407,9 +407,6 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 	s.sndWnd = seg.window
 	// 获取确认号
 	ack := seg.ackNumber
-	//if s.ep.id.LocalPort != 9999 {
-	//	logger.NOTICE("进入处理ack报文", atoi(ack-1), atoi(s.sndUna), atoi(s.sndNxt))
-	//}
 	// 如果ack在最小未确认的seq和segNext之间
 	if (ack - 1).InRange(s.sndUna, s.sndNxt) {
 		// 收到了东西 就暂停计时
@@ -426,20 +423,42 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 		// 获取这次确认的字节数，即 ack - snaUna
 		acked := s.sndUna.Size(ack)
 		// 更新下一个未确认的序列号
+		/*
+      writeNxt(队列的指针) V      outstanding: 2->1
+]->[seg3->seg2->seg1]->[seg3] ==> seg2 (队列中暂存)   -seg1-(已确认 丢弃)
+         sndNxt(对应的字节)^         ^ sndUna(未确认的字节)
+		*/
 		s.sndUna = ack
 
 		ackLeft := acked
 		originalOutstanding := s.outstanding
 		// 从发送链表中删除已经确认的数据，发送窗口的滑动。
+		/*
+		   假设我们收到了seg2开头的那个序号 我们将向后移动未确认字节到seg2
+		   并从写队列中彻底删除seg1
+
+      writeNxt(队列的指针) V
+]->[seg3->seg2->seg1]->[seg3] ==> seg2 (队列中暂存)   -seg1-(已确认 丢弃)
+         sndNxt(对应的字节)^         ^ sndUna(未确认的字节)
+		 */
 		for ackLeft > 0 { // 有成功确认的数据 丢弃它们 有剩余数据的话继续发送(根据拥塞策略控制)
 			seg := s.writeList.Front()
 			datalen := seg.logicalLen()
 
+			// 一个不完整的段 ackLeft=0不执行这步
+			// [##seg1##]  =>  [##] 这部分可能会重发一次
+			//    ^ack
 			if datalen > ackLeft {
 				seg.data.TrimFront(int(ackLeft))
 				break
 			}
 
+			/*
+			上一个段被完整确认 如果段指针来到了写队列的头指针
+      writeNxt(队列的指针) V
+]->[seg3->seg2->seg1]->[seg3] ==> seg2 (队列中暂存)   -seg1-(已确认 丢弃)
+         sndNxt(对应的字节)^         ^ sndUna(未确认的字节)
+			 */
 			if s.writeNext == seg {
 				s.writeNext = seg.Next()
 			}
