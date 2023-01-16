@@ -1430,15 +1430,15 @@ func (e *endpoint) handleListenSegment(ctx *listenContext, s *segment) {
 
 
 ``` go
-			c	   flag  	    s
-生成ISN1	|				    |
+            c        flag       s
+生成ISN1    |                   |
    sync_sent|------ isn1 0 ---->|sync_rcvd
-			|			      	|
-			|			      	|生成ISN2
+            |                   |
+            |                   |生成ISN2
  established|<--- isn2 isn+1 ---|
-			|			      	|
-			|			      	|
-			|---isn1+1 isn2+1-->|established
+            |                   |
+            |                   |
+            |---isn1+1 isn2+1-->|established
 `
 ```
 
@@ -1609,7 +1609,7 @@ func (e *endpoint) Write(p tcpip.Payload,
 ### able send date
 ```
 
-
+操作发送队列，摘取发送队列压入写队列的末尾，并推动写队列写入数据
 
 ``` go
 // 从发送队列中取出数据并发送出去
@@ -1643,6 +1643,7 @@ func (e *endpoint) handleWrite() *tcpip.Error {
 }
 ```
 
+发送队列和写队列的关系
 
 ``` go
 
@@ -1658,6 +1659,10 @@ ep.snd.writeList:...->seglist3->seglist2->seglist1 =>
 					  
 我们消费数据的时候找到写队列的队列头，然后遍历它
 
+                       writeNxt(队列的指针) V
+[seg2->seg1]->[seg3->seg2->seg1]->[seg3->seg2] ==> seg1
+                          sndNxt(对应的字节)^         ^ sndUna(未确认的字节)
+					  
 ```
 
 
@@ -1759,27 +1764,32 @@ func (s *sender) sendData() {
 ```
 
 
-``` go
-c       seq    ack      s
-|      				    |
-|-----isn1+101 isn2+1-->| 发送100个字节 请确认 没有收到你的数据
-|      			      	|
-|      			      	|
-|<--- isn2+1 isn+101 ---| 收到100个字节 确认了 不发送给你数据
-|      			      	|
-|      			      	|
-|-----isn1+201 isn2+1-->| 发送100个字节  请确认 没有受到你的数据
-|      			      	|
-|      			      	|
-|<---isn2+101 isn1+201--| 收到100个字节 确认了 发送给你100个字节
-|      			      	|
-|      			      	|
-|---isn1+201 isn2+101-->| 收到100个字节 确认了 不发送数据给你
+如何处理对应的ACK报文 
 
+1. 首先对于成功确认的数据我们需要将它从写队列中摘除，并更新暂存中的段计数
+2. 由于存在累积确认机制 接收方同时获取到多个连续报文的时候 将直接回复最后一个序号 而非逐个确认 所以发送方也需要以暂存区为单位处理ACK报文 
+3. 如果暂存区的数据在这次数据确认过程中还有剩余 我们可能需要再次发送这些剩余数据
+
+``` go
+      writeNxt(队列的指针) V
+]->[seg3->seg2->seg1]->[seg3] ==> seg2 (队列中暂存)   -seg1-(已确认 丢弃)
+         sndNxt(对应的字节)^         ^ sndUna(未确认的字节)
+	
+因为存在还未确认的字节 对于seg2我们需要开启对应的定时重发机制
+
+
+如果出现了sndNxt == sndUna 说明没数据或者不允许发送了
+
+                 writeNxt(队列的指针) V
+[                                     ]            -seg2+seg1-(已确认)
+                    sndNxt(对应的字节)^sndUna(未确认的字节)
+
+                 writeNxt(队列的指针) V
+[seg2->seg1]->[seg3->seg2->seg1]->[seg3]            -seg2+seg1-(已确认)
+                    sndNxt(对应的字节)^sndUna(未确认的字节)
 ```
 
 
-处理对应的ACK报文
 
 ``` go
 
@@ -1810,20 +1820,36 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 			// TSVal/Ecr values sent by Netstack are at a millisecond
 			// granularity.
 			elapsed := time.Duration(s.ep.timestamp()-seg.parsedOptions.TSEcr) * time.Millisecond
+			//logger.NOTICE("snd 424 ", elapsed.String())
 			s.updateRTO(elapsed)
 		}
 		// 获取这次确认的字节数，即 ack - snaUna
 		acked := s.sndUna.Size(ack)
 		// 更新下一个未确认的序列号
+		/*
+      writeNxt(队列的指针) V      outstanding: 2->1
+]->[seg3->seg2->seg1]->[seg3] ==> seg2 (队列中暂存)   -seg1-(已确认 丢弃)
+         sndNxt(对应的字节)^         ^ sndUna(未确认的字节)
+		*/
 		s.sndUna = ack
 
 		ackLeft := acked
 		originalOutstanding := s.outstanding
 		// 从发送链表中删除已经确认的数据，发送窗口的滑动。
+		/*
+		   假设我们收到了seg2开头的那个序号 我们将向后移动未确认字节到seg2
+		   并从写队列中彻底删除seg1
+
+      writeNxt(队列的指针) V
+]->[seg3->seg2->seg1]->[seg3] ==> seg2 (队列中暂存)   -seg1-(已确认 丢弃)
+         sndNxt(对应的字节)^         ^ sndUna(未确认的字节)
+		 */
 		for ackLeft > 0 { // 有成功确认的数据 丢弃它们 有剩余数据的话继续发送(根据拥塞策略控制)
 			seg := s.writeList.Front()
 			datalen := seg.logicalLen()
 
+			// [##seg1##]  =>  [##] 这部分可能会重发一次
+			//    ^ack
 			if datalen > ackLeft {
 				seg.data.TrimFront(int(ackLeft))
 				break
@@ -1860,10 +1886,6 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 		s.resendSegment()
 	}
 
-	//if s.ep.id.LocalPort != 9999 {
-	//	log.Println(s)
-	//}
-
 	// 现在某些待处理数据已被确认，或者窗口打开，或者由于快速恢复期间出现重复的ack而导致拥塞窗口膨胀，
 	// 因此发送更多数据。如果需要，这也将重新启用重传计时器。
 	s.sendData()
@@ -1871,26 +1893,49 @@ func (s *sender) handleRcvdSegment(seg *segment) {
 ```
 
 
+
+
+``` go
+c       seq    ack      s
+|                       |
+|-----isn1+101 isn2+1-->| 发送100个字节 请确认 没有收到你的数据
+|                       |
+|                       |
+|<--- isn2+1 isn+101 ---| 收到100个字节 确认了 不发送给你数据
+|                       |
+|                       |
+|-----isn1+201 isn2+1-->| 发送100个字节  请确认 没有受到你的数据
+|                       |
+|                       |
+|<---isn2+101 isn1+201--| 收到100个字节 确认了 发送给你100个字节
+|                       |
+|                       |
+|---isn1+201 isn2+101-->| 收到100个字节 确认了 不发送数据给你
+
+```
+
+
+
 #### 连接的断开
 
 ``` go
-			c	   flag  	s
-        	|				|
-		1	|------fin----->|
-			|				|
-			|<-----ack------| 2
-			|				|
-			|				|
-			|<-----ack------|
-			|				|
-			|-----ack------>|
-			|				|
-			|				|
-			|<------fin-----| 3
-			|				|
-		4	|------ack----->|
-			|				|
-			|				|
+    c     flag      s
+    |               |
+  1 |------fin----->|
+    |               |
+    |<-----ack------| 2
+    |               |
+    |               |
+    |<-----ack------|
+    |               |
+    |-----ack------>|
+    |               |
+    |               |
+    |<------fin-----| 3
+    |               |
+  4 |------ack----->|
+    |               |
+    |				|
 
 ```
 
